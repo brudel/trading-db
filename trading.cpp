@@ -247,12 +247,12 @@ int interpolation_search(int* vec, int top, int value)
 void filter_products(double* Xp, double** _X, int n_groups, product_map* prods_map)
 {
 	//elog(INFO, "Entro");
-	double (*X)[prods_map->size()] = (void*)_X;
-	int count = 0, idx, m_count, aux;
-	int* eliminated = palloc(sizeof(*eliminated)* prods_map->size()), *moved;
+	int n_total_prods = prods_map->size(), count = 0, idx, m_count, aux;
+	double (*X)[n_total_prods] = (void*)_X;
+	int* eliminated = palloc(sizeof(*eliminated)* n_total_prods), *moved;
 
 	//Identifica
-	for (int i = 0; i < prods_map->size(); ++i)
+	for (int i = 0; i < n_total_prods; ++i)
 		if (Xp[i] == 0)
 			eliminated[count++] = i;
 
@@ -265,7 +265,7 @@ void filter_products(double* Xp, double** _X, int n_groups, product_map* prods_m
 	moved = palloc(sizeof(*eliminated) * count);
 
 	m_count = 0;
-	aux = prods_map->size() - count;
+	aux = n_total_prods - count;
 
 	idx = count;
 	while (eliminated[--idx] >= aux);
@@ -274,10 +274,10 @@ void filter_products(double* Xp, double** _X, int n_groups, product_map* prods_m
 		while (aux != eliminated[idx])
 			moved[m_count++] = aux++;
 
-	while (aux < prods_map->size())
+	while (aux < n_total_prods)
 		moved[m_count++] = aux++;
 
-	aux = prods_map->size() - count;
+	aux = n_total_prods - count;
 
 	//Substituí
 	for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
@@ -325,24 +325,34 @@ end_loop:
 	pfree(moved);
 }
 
-void calc_M(double** _X, double* Xp, double* Xc, int n_groups, product_map* prods_map, int total,
-	char**_M, double* Mc, double* Mp)
+void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int n_total_prods,
+ 	double total, char**_M, double* Mc, double* Mp)
 {
-	char (*X)[prods_map->size()] = (void*) _X;
-	char (*M)[prods_map->size()] = (void*) _M;
+	double (*X)[n_total_prods] = (void*) _X;
+	char (*M)[n_prods] = (void*) _M;
 
-	for (int i = 0; i < prods_map->size(); ++i)
-		Mp[i] = 0; //# Da pra iniciar com o primeiro valor do for do M[0][i]
 
-	//elog(INFO, "for i %d j %d", n_groups, prods_map->size());
-
+	elog(INFO, "total: %lf", total);
+	
 	for (int i = 0; i < n_groups; ++i)
+		elog(INFO, "Xc[%d]: %lf", i, Xc[i]);
+
+	Mc[0] = 0;
+	for (int j = 0; j < n_prods; ++j)
+	{
+		//elog(INFO, "M[%d][%d] = %lf * %lf / (%lf * %lf)", 0, j, X[0][j], total, Xc[0],  Xp[j]);
+		M[0][j] = (X[0][j] * total / (Xc[0] * Xp[j]) >= 1 ? 1 : 0);
+		Mc[0] += M[0][j];
+		Mp[j] = M[0][j];
+	}
+
+	for (int i = 1; i < n_groups; ++i)
 	{
 		Mc[i] = 0;
-		for (int j = 0; j < prods_map->size(); ++j)
+		for (int j = 0; j < n_prods; ++j)
 		{
-			//elog(INFO, "M[%d][%d] = %lf * %lf / (%lf * %lf)", i, j, X[i][j], total, Xc[i],  Xp[j]);
 			M[i][j] = (X[i][j] * total / (Xc[i] * Xp[j]) >= 1 ? 1 : 0);
+			//elog(INFO, "M[%d][%d] %d = %lf * %lf / (%lf * %lf)", i, j, M[i][j], X[i][j], total, Xc[i], Xp[j]);
 			Mc[i] += M[i][j];
 			Mp[j] += M[i][j];
 		}
@@ -387,10 +397,11 @@ void calc_eci(country_map* countrs_map, int n_groups, product_map* prods_map, in
 {
 	//# Mc e Mp podem virar int* 
 	double *Xc, *Xp, *Mc, *Mp, *K, total = 0;
+	int n_total_prods = prods_map->size();
 
-	double (*X)[prods_map->size()] = palloc(sizeof(*X)*n_groups);
+	double (*X)[n_total_prods] = palloc(sizeof(*X)*n_groups);
 	Xc = palloc(sizeof(*Xc)*n_groups);
-	Xp = palloc(sizeof(*Xp)*prods_map->size());
+	Xp = palloc(sizeof(*Xp)*n_total_prods);
 
 	calc_X(countrs_map, n_groups, prods_map, year, hs_digits, (double**) X, Xp, Xc);
 	filter_products(Xp, (double**) X, n_groups, prods_map);
@@ -403,10 +414,13 @@ void calc_eci(country_map* countrs_map, int n_groups, product_map* prods_map, in
 	Mp = palloc(sizeof(*Mp)*prods_map->size());
 	//# Conferir valores de Xc e Xp
 
-	calc_M((double**) X, Xp, Xc, n_groups, prods_map, total, (char**) M, Mc, Mp);
+	calc_M((double**) X, Xp, Xc, n_groups, prods_map->size(), n_total_prods, total, (char**) M, Mc, Mp);
 	pfree(X);
 	pfree(Xc);
 	pfree(Xp);
+
+	for (int i = 0; i < n_groups; ++i)
+		elog(INFO, "Mc[%d]: %lf", i, Mc[i]);
 
 	double (*W)[n_groups] = palloc(sizeof(*W)*n_groups);
 
