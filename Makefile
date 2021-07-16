@@ -9,39 +9,24 @@ static := -llapacke -lblas -lgfortran -lm
 #-Wl,-Bstatic -Wl,-Bdynamic
 
 teste: ${so_file}
-	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015, 3);"
-#"SELECT * FROM common_eci(array(SELECT (code, ARRAY[code])::cgroup FROM country ORDER BY code), 2015, 3);"
-#"SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015, 3);"
-#"SELECT * FROM calculate_eci(ARRAY[('oie','{a,b}'), ('euro','{a,b,m,kk}'),  ('g2','{a,b,m}')]::cgroup[], 2015, 3);"
+	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015);"
+#"SELECT euclidean_distance('chn', 'uni')"
+#"SELECT * FROM common_eci(array(SELECT (exporter, ARRAY[exporter])::cgroup FROM transaction WHERE year = 2015 GROUP BY exporter ORDER BY exporter), 2015);"
+#"SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015);"
 
 ${so_file}: trading.o
 	g++ -fPIC -shared trading.o -I${pg13} -o ${so_file} ${static}
 
-trading.o: trading.cpp Makefile
+trading.o: trading.cpp Makefile text.h
 	g++ -fPIC -shared trading.cpp -I${pg13} -c -fpermissive -fno-exceptions
-
-redef:
-	${ts} psql ${tsparams} ${localparams} -c \
-	"DROP FUNCTION IF EXISTS common_eci;"
-	${ts} psql ${tsparams} ${localparams} -c \
-	"CREATE OR REPLACE FUNCTION common_eci(groups cgroup[], year integer, hs_digits integer)\
-\
-    RETURNS TABLE\
-        (\"group\" text, eci double precision)\
-\
-    AS\
-        '/tsdata/trading.so', 'common_eci'\
-\
-    LANGUAGE\
-        C STRICT;"
 
 conn:
 	${ts} psql ${tsparams}
 
-cteste: teste.c
-	gcc teste.c -o exe
+cteste: teste.cpp
+	g++ teste.cpp -o exe
 	./exe
 
-vcteste: teste.c
-	gcc teste.c -o exe -g
+vcteste: teste.cpp
+	g++ teste.cpp -o exe -g
 	valgrind ./exe
