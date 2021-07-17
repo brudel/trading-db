@@ -189,15 +189,25 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int hs
 		return;
 
 	TupleDesc tupdesc = SPI_tuptable->tupdesc;
+/*
+	auto coiso = countrs_map->hash_function();
+	elog(INFO, "%ld, %ld, %d", coiso("gbr"), coiso("gbr"), coiso("gbr", "gbr"));
+
+	auto itt = countrs_map->find("gbr");
+	if (itt == countrs_map->end())
+		elog(INFO, "erroww");
+	else
+		elog(INFO, "sec: %d", itt->second);*/
 
 	for (int i = 0; i < SPI_tuptable->numvals; i++)
 	{
 		HeapTuple tuple = SPI_tuptable->vals[i];
 
 		auto it = countrs_map->find(SBI_getString(tuple, tupdesc, 1, &is_null));
+		//elog(INFO, "truple[%d]='%3s'", i, SBI_getString(tuple, tupdesc, 1, &is_null));
 		if (it == countrs_map->end())
 			continue;
-		elog(INFO, "a");
+		//elog(INFO, "a");
 
 		c = it->second;
 		p = (*prods_map)[SBI_getString(tuple, tupdesc, 2, &is_null)];
@@ -243,7 +253,6 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 	for (; ++idx < count; ++aux)
 		while (aux != eliminated[idx])
 			moved[m_count++] = aux++;
-	elog(INFO, "a");
 
 	while (aux < n_total_prods)
 		moved[m_count++] = aux++;
@@ -253,38 +262,38 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 	//Substituí
 	for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
 	{
-		elog(INFO, "for in");
+		//elog(INFO, "for in");
 		while (idx = interpolation_search(eliminated, count, it->second) >= 0)
 		{
-			elog(INFO, "while in");
+			//elog(INFO, "while in");
 			it = prods_map->erase(it);
 			if (it == prods_map->end())
 				goto end_loop;
-			elog(INFO, "while out");
+			//elog(INFO, "while out");
 		}
 
-		elog(INFO, "for mid");
+		//elog(INFO, "for mid");
 
 		if (it->second >= aux)
 		{
-			elog(INFO, "if in");
+			//elog(INFO, "if in");
 			idx = interpolation_search(moved, m_count, it->second);
-			elog(INFO, "\tinter");
+			//elog(INFO, "\tinter");
 
 			if (idx == -1)
 				elog(INFO, "DEU MERDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA AQUI Ó: %d", it->second);
 
 
 			Xp[eliminated[idx]] = Xp[it->second];
-			elog(INFO, "\tatrib");
+			//elog(INFO, "\tatrib");
 
 			for (int i = 0; i < n_groups; ++i)
 				X[i][eliminated[idx]] = X[i][it->second];
 			
 			it->second = eliminated[idx];
-			elog(INFO, "if out");
+			//elog(INFO, "if out");
 		}
-		elog(INFO, "for out");
+		//elog(INFO, "for out");
 	}
 end_loop:
 

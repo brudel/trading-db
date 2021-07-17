@@ -119,10 +119,8 @@ struct l_str
 		if (n & 2 && ((short*)a)[(n & 4) >> 1] != ((short*)b)[(n & 4) >> 1])
 			return false;
 
-		if (n & 1 && a[n & 6] == b[n & 6])
+		if (n & 1 && a[n & 6] != b[n & 6])
 			return false;
-		
-		//elog(INFO, "%d comp: %6s vs %6s", n, a, b);
 
 		return true;
 	}
