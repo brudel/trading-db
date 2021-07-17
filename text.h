@@ -105,41 +105,6 @@ int interpolation_search(int* vec, int top, int value)
 	return value == vec[bottom] ? bottom : -1;
 }
 
-
-
-struct country_equal
-{
-	bool operator()(char* a, char* b) const
-	{
-		return *(short*)a == *(short*)b && a[2] == b[2];
-	}
-};
-
-struct country_hash
-{
-	size_t operator()(char* str) const
-	{
-		return (size_t)((*(short*)str) << 16) | (size_t) str[2];
-	}
-};
-
-struct product_equal
-{
-	bool operator()(char* a, char* b) const
-	{
-		return *(int*)a == *(int*)b && ((short*)a)[2] == ((short*)b)[2];
-	}
-};
-
-struct product_hash
-{
-	size_t operator()(char* str) const
-	{
-		return (size_t)((*(int*)str) << 16) | (size_t) ((short*)str)[2];
-	}
-};
-
-
 struct l_str
 {
 	int n;
@@ -164,6 +129,17 @@ struct l_str
 
 	size_t operator()(char* str) const
 	{
-		return (size_t)((*(int*)str) << 16) | (size_t) ((short*)str)[2];
+		size_t hash = 0;
+
+		if (n & 4)
+			hash |= *(int*)str;
+
+		if (n & 2)
+			hash = (hash << 16) | ((short*)str)[(n & 4) >> 1];
+
+		if (n & 1)
+			hash = (hash << 8) | str[n & 6];
+
+		return hash * 31;
 	}
 };

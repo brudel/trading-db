@@ -180,7 +180,6 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int hs
 	query[116] += hs_digits << 1;
 #undef Q
 	int status = SPI_execute(query, true, 0);
-	elog(INFO, "%d", SPI_tuptable->numvals);
 	pfree(query);
 
 
@@ -198,6 +197,7 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int hs
 		auto it = countrs_map->find(SBI_getString(tuple, tupdesc, 1, &is_null));
 		if (it == countrs_map->end())
 			continue;
+		elog(INFO, "a");
 
 		c = it->second;
 		p = (*prods_map)[SBI_getString(tuple, tupdesc, 2, &is_null)];
@@ -234,14 +234,16 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 	moved = palloc(sizeof(*eliminated) * count);
 
 	m_count = 0;
-	aux = n_total_prods - count;
+	aux = n_total_prods - count; //Menor a ser movid
 
 	idx = count;
-	while (eliminated[--idx] >= aux);
+	while (eliminated[--idx] >= aux); //Index do menor removido do intervalo dos movidos
+	elog(INFO, "idx: %d count: %d aux: %d", idx, count, aux);
 
 	for (; ++idx < count; ++aux)
 		while (aux != eliminated[idx])
 			moved[m_count++] = aux++;
+	elog(INFO, "a");
 
 	while (aux < n_total_prods)
 		moved[m_count++] = aux++;
@@ -251,37 +253,38 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 	//Substituí
 	for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
 	{
-		//elog(INFO, "for in");
+		elog(INFO, "for in");
 		while (idx = interpolation_search(eliminated, count, it->second) >= 0)
 		{
-			//elog(INFO, "while in");
+			elog(INFO, "while in");
 			it = prods_map->erase(it);
 			if (it == prods_map->end())
 				goto end_loop;
-			//elog(INFO, "while out");
+			elog(INFO, "while out");
 		}
 
-		//elog(INFO, "for mid");
+		elog(INFO, "for mid");
 
 		if (it->second >= aux)
 		{
-			//elog(INFO, "if in");
+			elog(INFO, "if in");
 			idx = interpolation_search(moved, m_count, it->second);
+			elog(INFO, "\tinter");
 
 			if (idx == -1)
 				elog(INFO, "DEU MERDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA AQUI Ó: %d", it->second);
 
-			//elog(INFO, "\tinter");
-			//elog(INFO, "\tatrib");
 
 			Xp[eliminated[idx]] = Xp[it->second];
+			elog(INFO, "\tatrib");
 
 			for (int i = 0; i < n_groups; ++i)
 				X[i][eliminated[idx]] = X[i][it->second];
 			
 			it->second = eliminated[idx];
+			elog(INFO, "if out");
 		}
-		//elog(INFO, "for out");
+		elog(INFO, "for out");
 	}
 end_loop:
 
@@ -289,7 +292,7 @@ end_loop:
 		if (Xp[i] == 0)
 			elog(INFO, "Deu merda");
 
-	//elog(INFO, "NULLs: %d", count);
+	elog(INFO, "NULLs: %d", count);
 	pfree(eliminated);
 	pfree(moved);
 }
@@ -439,9 +442,9 @@ void common_eci_init(FunctionCallInfo fcinfo)
 {
 	FuncCallContext *funcctx;
 	perm_mem* pm;
-	ArrayType* groups;
 	TupleDesc td;
 	ArrayMetaState *mstate = NULL;
+	ArrayType* groups = PG_GETARG_ARRAYTYPE_P(0);
 
 	//Validate args
 	if (PG_GETARG_INT32(3) > 3 || PG_GETARG_INT32(3) < 1)
@@ -472,15 +475,16 @@ void common_eci_init(FunctionCallInfo fcinfo)
 	//Calcula ECI
 	SPI_connect();
 
-	//country_map* countrs_map = new country_map(241);
 	l_map* countrs_map = new l_map(241, l_str(3), l_str(3));
 	l_map* prods_map = new l_map(5300, l_str(6), l_str(6));
 	initick();
 	create_common_countrs_map(countrs_map, groups);
+	elog(INFO, "contrs: %d", countrs_map->size());
 	tick("countrs_map");
 	create_prods_map(prods_map, PG_GETARG_INT32(3));
+	elog(INFO, "prods: %d", prods_map->size());
 	tick("prods_map");
-	//elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
+	elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
 
 	calc_eci(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1), PG_GETARG_INT32(3), pm);
 	tick("calc_eci");
@@ -506,59 +510,7 @@ Datum common_eci(PG_FUNCTION_ARGS)
 
 	//Primeira chamada: cálculo dos valores
 	if (SRF_IS_FIRSTCALL())
-	{
-	FuncCallContext *funcctx;
-	perm_mem* pm;
-	ArrayType* groups;
-	TupleDesc td;
-	ArrayMetaState *mstate = NULL;
-
-	//Validate args
-	if (PG_GETARG_INT32(3) > 3 || PG_GETARG_INT32(3) < 1)
-		ereport(ERROR,
-		(
-			errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			errmsg("hs_digit_pairs must be 1, 2 or 3")
-		));
-
-	//Cria contexto de chamada
-	funcctx = SRF_FIRSTCALL_INIT();
-
-	//Identifica tipo de retorno
-	if (get_call_result_type(fcinfo, NULL, &td) != TYPEFUNC_COMPOSITE)
-		ereport(ERROR,
-		(
-			errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			errmsg("function returning record called in context that cannot accept type record")
-		));
-	funcctx->tuple_desc = BlessTupleDesc(td);
-
-	//Cria memória do contexto
-	pm = (perm_mem*) palloc(sizeof(perm_mem));
-	funcctx->user_fctx = pm;
-
-	pm->ar_it = array_create_iterator(groups, 0, mstate);
-
-	//Calcula ECI
-	SPI_connect();
-
-	//country_map* countrs_map = new country_map(241);
-	l_map* countrs_map =  new l_map(241, l_str(3), l_str(3));
-	l_map* prods_map =  new l_map(5300, l_str(6), l_str(6));
-	initick();
-	create_common_countrs_map(countrs_map, groups);
-	tick("countrs_map");
-	create_prods_map(prods_map, PG_GETARG_INT32(3));
-	tick("prods_map");
-	//elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
-
-	calc_eci(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1), PG_GETARG_INT32(3), pm);
-	tick("calc_eci");
-
-	delete prods_map, countrs_map;
-	SPI_finish();
-	//elog(INFO, "final first");
-}
+		common_eci_init(fcinfo);
 
 	//Recupera contexto da chamada
 	funcctx = SRF_PERCALL_SETUP();
