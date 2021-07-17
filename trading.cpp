@@ -16,7 +16,6 @@ PG_MODULE_MAGIC;
 //# Usar umas funções hash descentes
 //# Passar funções de map no construtor e dependendo dos pares de dígitos do produtoo
 //# Usar média de imp_val e exp_val em vez de só o segundo
-//# Funções hash para os vários tamanhos de hs
 
 
 #define PROFILE
@@ -55,9 +54,11 @@ typedef struct perm_mem {
 		SPI_getbinval(tuple, tupdesc, col, is_null) \
 	)
 
-//typedef std::unordered_map<char*, int, country_hash, country_equal> country_map;
-//typedef std::unordered_map<char*, int, product_hash, product_equal> product_map;
+#define PMYSTRING_INIT(mstr, n) mstr = palloc(n); \
+mstr->len = 0;
+
 typedef std::unordered_map<char*, int, l_str, l_str> l_map;
+
 
 void create_all_countrs_map(l_map *countrs_map)
 {
@@ -140,8 +141,8 @@ void create_prods_map(l_map *prods_map, int hs_digits)
 	SPI_freetuptable(SPI_tuptable);
 }
 
-void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int hs_digits,	
-	double** _X, double* Xp, double* Xc)
+void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
+	int f_year, int hs_digits, double** _X, double* Xp, double* Xc)
 {
 	double (*X)[prods_map->size()] = (void*)_X;
 	int c, p;
@@ -170,16 +171,41 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int hs
 	tick("calc_X set");
 
 //GRUP BY make it a lot faster
-#define Q "SELECT exporter, left(product, 0), sum(exp_val) "\
-		"FROM transaction "\
-		"WHERE year = 2015 "\
-		"GROUP BY exporter, left(product, 0)"
-	char* query = palloc(sizeof(Q));
-	memcpy(query, Q, sizeof(Q));
-	query[31] += hs_digits << 1;
-	query[116] += hs_digits << 1;
-#undef Q
-	int status = SPI_execute(query, true, 0);
+#define Q0 "SELECT exporter, left(product, 0), sum(exp_val) FROM transaction WHERE year "
+#define Q1 "= "
+#define Q2 ">= "
+#define Q3 " AND year <= "
+#define Q4 " GROUP BY exporter, left(product, 0)"
+
+	mystring* PMYSTRING_INIT(query, 1000);
+
+	query->litcat(Q0);
+	query->data[31] += hs_digits << 1;
+
+	if (f_year == 0)
+	{
+		query->litcat(Q1);
+		query->concat(s_year);
+	}
+	else
+	{
+		query->litcat(Q2);
+		query->concat(s_year);
+		query->litcat(Q3);
+		query->concat(f_year);
+	}
+
+	query->concat(Q4, sizeof(Q4));
+	query->data[query->len - 3] += hs_digits << 1;
+
+#undef Q0
+#undef Q1
+#undef Q2
+#undef Q3
+#undef Q4
+
+	elog(INFO, "query: %s", query->data);
+	int status = SPI_execute(query->data, true, 0);
 	pfree(query);
 
 
@@ -399,7 +425,8 @@ void calc_Kc(double** W, int n_groups, double* K)
 	pfree(avtr);
 }
 
-void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int hs_digits, perm_mem* pm)
+void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
+	int f_year, int hs_digits, perm_mem* pm)
 {
 	//# Mc e Mp podem virar int* 
 	double *Xc, *Xp, X_total = 0, *Mc, *Mp, *K;
@@ -409,7 +436,7 @@ void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int 
 	Xc = palloc(sizeof(*Xc)*n_groups);
 	Xp = palloc(sizeof(*Xp)*n_total_prods);
 
-	calc_X(countrs_map, n_groups, prods_map, year, hs_digits, (double**) X, Xp, Xc);
+	calc_X(countrs_map, n_groups, prods_map, s_year, f_year, hs_digits, (double**) X, Xp, Xc);
 	tick("calc_X");
 	filter_products(Xp, (double**) X, n_groups, prods_map);
 	tick("filter_products");
@@ -422,7 +449,8 @@ void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int year, int 
 	Mp = palloc(sizeof(*Mp)*prods_map->size());
 	//# Conferir valores de Xc e Xp
 
-	calc_M((double**) X, Xp, Xc, n_groups, prods_map->size(), n_total_prods, X_total, (char**) M, Mc, Mp);
+	calc_M((double**) X, Xp, Xc, n_groups, prods_map->size(), n_total_prods,
+		X_total, (char**) M, Mc, Mp);
 	pfree(X);
 	pfree(Xc);
 	pfree(Xp);
@@ -495,7 +523,8 @@ void common_eci_init(FunctionCallInfo fcinfo)
 	tick("prods_map");
 	elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
 
-	calc_eci(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1), PG_GETARG_INT32(3), pm);
+	calc_eci(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1),
+		PG_GETARG_INT32(2), PG_GETARG_INT32(3), pm);
 	tick("calc_eci");
 
 	delete prods_map, countrs_map;
@@ -514,8 +543,6 @@ Datum common_eci(PG_FUNCTION_ARGS)
 	Datum dt[2], ret, daux;
 	bool isnull[2] = {false, false}, isNullAux;
 	perm_mem* pm;
-
-	//hth = DatumGetHeapTupleHeader();
 
 	//Primeira chamada: cálculo dos valores
 	if (SRF_IS_FIRSTCALL())
@@ -546,7 +573,6 @@ Datum common_eci(PG_FUNCTION_ARGS)
 
 void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
 {
-	mystring* start_yt, *end_yt;
 	int len = VARSIZE_ANY_EXHDR(prod);
 
 	if (len < 0 || len > 6 || len & 1)
@@ -567,7 +593,7 @@ void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
 	len += sizeof(Q0) + sizeof(Q1) + sizeof(Q2) + sizeof(Q3) + sizeof(Q4) + sizeof(Q5) + sizeof(Q6) + 15;
 	//15 = + 2*10(ints) + 1(\') - 6 (sizeof \0s)
 
-	mystring* query = palloc(4 + len);
+	mystring* PMYSTRING_INIT(query, 4 + len);
 	query->litcat(Q0);
 	query->concat(VARDATA_ANY(c1), VARSIZE_ANY_EXHDR(c1));
 	query->litcat(Q1);
@@ -577,13 +603,13 @@ void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
 	if (start_yi != 0)
 	{
 		query->litcat(Q3);
-		query->len += itoa(start_yi, query->end());
+		query->concat(start_yi);
 	}
 
 	if (end_yi != 0)
 	{
 		query->litcat(Q4);
-		query->len += itoa(end_yi, query->end());
+		query->concat(end_yi);
 	}
 
 	if (VARSIZE_ANY_EXHDR(prod) > 0)

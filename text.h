@@ -2,56 +2,6 @@
 // For hardcoded strings
 #define litcat(lit) concat(lit, sizeof(lit) - 1)
 
-struct mystring
-{
-	int len;
-	char data[];
-
-	void concat(mystring* str)
-	{
-		memcpy(data + len, str->data, str->len);
-		len += str->len;
-	}
-
-	void concat(char* cstr, int clen)
-	{
-		memcpy(data + len, cstr, clen);
-		len += clen;
-	}
-
-	void concat(char c)
-	{
-		data[len++] = c;
-	}
-
-	char* end()
-	{
-		return data + len;
-	}
-};
-
-void itoa(int num, mystring* str)
-{
-	char buffer[10];
-	int i = 0, j = 0;
-
-	if (num < 0)
-	{
-		str->data[j++] = '-';
-		num = -num;
-	}
-
-	do {
-		buffer[i++] = '0' + num % 10;
-	} while (num /= 10);
-
-	while(i)
-		str->data[j++] = buffer[--i];
-
-	str->len = j;
-
-	return j;
-}
 
 int itoa(int num, char* str)
 {
@@ -75,6 +25,39 @@ int itoa(int num, char* str)
 
 	return j;
 }
+
+struct mystring
+{
+	int len;
+	char data[];
+
+	void concat(mystring* str)
+	{
+		memcpy(data + len, str->data, str->len);
+		len += str->len;
+	}
+
+	void concat(char* cstr, int clen)
+	{
+		memcpy(data + len, cstr, clen);
+		len += clen;
+	}
+
+	void concat(char c)
+	{
+		data[len++] = c;
+	}
+
+	void concat(int d)
+	{
+		len += itoa(d, data + len);
+	}
+
+	char* end()
+	{
+		return data + len;
+	}
+};
 
 //https://www.sanfoundry.com/c-program-implement-interpolation-search-array-integers/
 int interpolation_search(int* vec, int top, int value)
