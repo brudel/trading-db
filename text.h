@@ -97,13 +97,13 @@ struct l_str
 	bool operator()(char* a, char* b) const
 	{
 		if (n & 4 && *(int*)a != *(int*)b)
-			return false;
+			{if(n==2)elog(INFO, "'%.2s' vs '%.2s'", a, b);return false;}
 
 		if (n & 2 && ((short*)a)[(n & 4) >> 1] != ((short*)b)[(n & 4) >> 1])
-			return false;
+			{if(n==2)elog(INFO, "'%.2s' vs '%.2s'", a, b);return false;}
 
 		if (n & 1 && a[n & 6] != b[n & 6])
-			return false;
+			{if(n==2)elog(INFO, "'%.2s' vs '%.2s'", a, b);return false;}
 
 		return true;
 	}

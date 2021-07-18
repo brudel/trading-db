@@ -14,11 +14,11 @@ PG_MODULE_MAGIC;
 #include "text.h"
 
 //# Usar umas funções hash descentes
-//# Passar funções de map no construtor e dependendo dos pares de dígitos do produtoo
 //# Usar média de imp_val e exp_val em vez de só o segundo
+//# Retirar indicadores de erro antes da entrega final
 
 
-#define PROFILE
+//#define PROFILE
 
 #ifdef PROFILE
 extern "C" {
@@ -117,12 +117,13 @@ void create_prods_map(l_map *prods_map, int hs_digits)
 	int count = 0;
 	bool is_null;
 
-#define Q "SELECT left(hs_code, 0) FROM product"
+#define Q "SELECT DISTINCT left(hs_code, 0) FROM product"
 	char* query = palloc(sizeof(Q));
 	memcpy(query, Q, sizeof(Q));
-	query[21] += hs_digits << 1;
+	query[30] |= hs_digits;
 #undef Q
 
+	//elog(INFO, "query: %s", query);
 	int status = SPI_execute(query, true, 0);
 	pfree(query);
 
@@ -135,10 +136,15 @@ void create_prods_map(l_map *prods_map, int hs_digits)
 		{
 			HeapTuple tuple = SPI_tuptable->vals[i];
 
+			//elog(INFO, "count = %d", count);
 			prods_map->insert({{SBI_getString(tuple, tupdesc, 1, &is_null), count++}});
 		}
 	}
 	SPI_freetuptable(SPI_tuptable);
+
+
+	//for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
+	//	elog(INFO, "prods[%.2s] = %d", it->first, it->second);
 }
 
 void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
@@ -180,7 +186,7 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	mystring* PMYSTRING_INIT(query, 1000);
 
 	query->litcat(Q0);
-	query->data[31] += hs_digits << 1;
+	query->data[31] |= hs_digits;
 
 	if (f_year == 0)
 	{
@@ -196,7 +202,7 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	}
 
 	query->concat(Q4, sizeof(Q4));
-	query->data[query->len - 3] += hs_digits << 1;
+	query->data[query->len - 3] |= hs_digits;
 
 #undef Q0
 #undef Q1
@@ -204,7 +210,7 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 #undef Q3
 #undef Q4
 
-	elog(INFO, "query: %s", query->data);
+	//elog(INFO, "query: %s", query->data);
 	int status = SPI_execute(query->data, true, 0);
 	pfree(query);
 
@@ -225,18 +231,22 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	else
 		elog(INFO, "sec: %d", itt->second);*/
 
+
+	//elog(INFO, "n: %d", SPI_tuptable->numvals);
 	for (int i = 0; i < SPI_tuptable->numvals; i++)
 	{
+		//elog(INFO, "a");
 		HeapTuple tuple = SPI_tuptable->vals[i];
 
 		auto it = countrs_map->find(SBI_getString(tuple, tupdesc, 1, &is_null));
 		//elog(INFO, "truple[%d]='%3s'", i, SBI_getString(tuple, tupdesc, 1, &is_null));
 		if (it == countrs_map->end())
 			continue;
-		//elog(INFO, "a");
+		//elog(INFO, "%d", i);
 
 		c = it->second;
 		p = (*prods_map)[SBI_getString(tuple, tupdesc, 2, &is_null)];
+		//elog(INFO, "b");
 
 		double value = SBI_getDouble(tuple, tupdesc, 3, &is_null);
 
@@ -244,6 +254,7 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 		//# Mais operações do que calcular em x[c][p] pronto, mas não precisa percorrer dnv
 		Xc[c] += value;
 		Xp[p] += value;
+		//elog(INFO, "c");
 	}
 	SPI_freetuptable(SPI_tuptable);
 }
@@ -274,7 +285,7 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 
 	idx = count;
 	while (eliminated[--idx] >= aux); //Index do menor removido do intervalo dos movidos
-	elog(INFO, "idx: %d count: %d aux: %d", idx, count, aux);
+	//elog(INFO, "idx: %d count: %d aux: %d", idx, count, aux);
 
 	for (; ++idx < count; ++aux)
 		while (aux != eliminated[idx])
@@ -327,7 +338,7 @@ end_loop:
 		if (Xp[i] == 0)
 			elog(INFO, "Deu merda");
 
-	elog(INFO, "NULLs: %d", count);
+	//elog(INFO, "NULLs: %d", count);
 	pfree(eliminated);
 	pfree(moved);
 }
@@ -482,14 +493,17 @@ void common_eci_init(FunctionCallInfo fcinfo)
 	TupleDesc td;
 	ArrayMetaState *mstate = NULL;
 	ArrayType* groups = PG_GETARG_ARRAYTYPE_P(0);
+	int hs_digits = PG_GETARG_INT32(3);
 
 	//Validate args
-	if (PG_GETARG_INT32(3) > 3 || PG_GETARG_INT32(3) < 1)
+	if (hs_digits > 3 || hs_digits < 1)
 		ereport(ERROR,
 		(
 			errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			errmsg("hs_digit_pairs must be 1, 2 or 3")
 		));
+
+	hs_digits <<= 1;
 
 	//Cria contexto de chamada
 	funcctx = SRF_FIRSTCALL_INIT();
@@ -513,18 +527,16 @@ void common_eci_init(FunctionCallInfo fcinfo)
 	SPI_connect();
 
 	l_map* countrs_map = new l_map(241, l_str(3), l_str(3));
-	l_map* prods_map = new l_map(5300, l_str(6), l_str(6));
+	l_map* prods_map = new l_map(5300, l_str(hs_digits), l_str(hs_digits));
 	initick();
 	create_common_countrs_map(countrs_map, groups);
-	elog(INFO, "contrs: %d", countrs_map->size());
 	tick("countrs_map");
-	create_prods_map(prods_map, PG_GETARG_INT32(3));
-	elog(INFO, "prods: %d", prods_map->size());
+	create_prods_map(prods_map, hs_digits);
 	tick("prods_map");
-	elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
+	//elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
 
 	calc_eci(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1),
-		PG_GETARG_INT32(2), PG_GETARG_INT32(3), pm);
+		PG_GETARG_INT32(2), hs_digits, pm);
 	tick("calc_eci");
 
 	delete prods_map, countrs_map;
