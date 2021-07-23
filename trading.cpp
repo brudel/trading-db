@@ -35,7 +35,10 @@ PG_FUNCTION_INFO_V1(func); \
 
 typedef struct perm_mem {
 	ArrayIterator ar_it;
-	double* ecis;
+	int n_prods;
+	text** prods;
+	double* indexes;
+	Datum vecs_tuple;
 } perm_mem;
 
 #define SBI_getString(tuple, tupdesc, col, is_null) (char*) \
@@ -55,6 +58,12 @@ typedef struct perm_mem {
 mstr->len = 0;
 
 typedef std::unordered_map<char*, int, l_str, l_str> l_map;
+
+enum index_t {
+	ECI = 1,
+	PCI,
+	ECI_PCI
+};
 
 
 void create_all_countrs_map(l_map *countrs_map)
@@ -484,7 +493,7 @@ void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	pm->ecis = K;
 }
 
-void common_eci_init(FunctionCallInfo fcinfo)
+void common_index_init(FunctionCallInfo fcinfo, index_t index)
 {
 	FuncCallContext *funcctx;
 	perm_mem* pm;
@@ -542,7 +551,7 @@ void common_eci_init(FunctionCallInfo fcinfo)
 	//elog(INFO, "final first");
 }
 
-Datum return_table(FunctionCallInfo fcinfo)
+Datum return_table(FunctionCallInfo fcinfo, index_t index)
 {
 	FuncCallContext *funcctx;
 	HeapTuple ht;
@@ -556,8 +565,8 @@ Datum return_table(FunctionCallInfo fcinfo)
 	pm = (perm_mem*) funcctx->user_fctx;
 
 	elog(INFO, "ret %d", funcctx->call_cntr);
-	//if (index == ECI)
-	//{
+	if (index == ECI)
+	{
 		//Encerra a última chamada
 		if (funcctx->call_cntr == *ARR_DIMS(PG_GETARG_ARRAYTYPE_P(0)))
 		{
@@ -569,9 +578,9 @@ Datum return_table(FunctionCallInfo fcinfo)
 		array_iterate(pm->ar_it, &daux, &isNullAux);
 		hth = DatumGetHeapTupleHeader(daux);
 		dt[0] = GetAttributeByNum(hth, 1, &isNullAux);
-	//}
-	//else
-	/*{
+	}
+	else
+	{
 		//Encerra a última chamada
 		if (funcctx->call_cntr == pm->n_prods)
 		{
@@ -580,11 +589,11 @@ Datum return_table(FunctionCallInfo fcinfo)
 		}
 
 		dt[0] = PointerGetDatum(pm->prods[funcctx->call_cntr]);
-	}*/
+	}
 		//elog(INFO, "a");
 		//elog(INFO, "K: %p %lf", pm->indexes, pm->indexes[0]);
 
-	dt[1] = Float8GetDatum(pm->ecis[funcctx->call_cntr]);
+	dt[1] = Float8GetDatum(pm->indexes[funcctx->call_cntr]);
 		//elog(INFO, "a");
 
 	//Cria e retorna tupla
@@ -602,10 +611,10 @@ BG_FUNCTION_INFO_V1(common_eci);
 Datum common_eci(PG_FUNCTION_ARGS)
 {
 	if (SRF_IS_FIRSTCALL())
-		common_eci_init(fcinfo);
+		common_index_init(fcinfo, ECI);
 
 	elog(INFO, "main");
-	return return_table(fcinfo);
+	return return_table(fcinfo, ECI);
 }
 
 BG_FUNCTION_INFO_V1(common_pci);
@@ -613,21 +622,20 @@ BG_FUNCTION_INFO_V1(common_pci);
 Datum common_pci(PG_FUNCTION_ARGS)
 {
 	if (SRF_IS_FIRSTCALL())
-		common_eci_init(fcinfo);
+		common_index_init(fcinfo, PCI);
 
-	return return_table(fcinfo);
+	return return_table(fcinfo, PCI);
 }
 
 BG_FUNCTION_INFO_V1(common_eci_pci);
 
 Datum common_eci_pci(PG_FUNCTION_ARGS)
 {
-	common_eci_init(fcinfo);
+	common_index_init(fcinfo, ECI_PCI);
 
-	//perm_mem* pm = (perm_mem*) SRF_PERCALL_SETUP()->user_fctx;
+	perm_mem* pm = (perm_mem*) SRF_PERCALL_SETUP()->user_fctx;
 
-	//PG_RETURN_DATUM(pm->vecs_tuple);
-	return 0;
+	PG_RETURN_DATUM(pm->vecs_tuple);
 }
 
 void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
