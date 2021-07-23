@@ -492,6 +492,7 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	tick("calc_X");
 	filter_products(Xp, (double**) X, n_groups, prods_map);
 	tick("filter_products");
+	pm->n_prods = prods_map->size();
 
 	for (int i = 0; i < n_groups; ++i)
 		X_total += Xc[i];
@@ -640,17 +641,14 @@ Datum return_table(FunctionCallInfo fcinfo, index_t index)
 	{
 		//Encerra a última chamada
 		if (funcctx->call_cntr == pm->n_prods)
-		{
-			pfree(pm->prods);
 			SRF_RETURN_DONE(funcctx);
-		}
 
 		dt[0] = PointerGetDatum(pm->prods[funcctx->call_cntr]);
 	}
 		//elog(INFO, "a");
 		//elog(INFO, "K: %p %lf", pm->indexes, pm->indexes[0]);
 
-	dt[1] = Float8GetDatum(pm->indexes[funcctx->call_cntr]);
+	dt[1] = Float8GetDatumFast(pm->indexes[funcctx->call_cntr]);
 		//elog(INFO, "a");
 
 	//Cria e retorna tupla

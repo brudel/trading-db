@@ -9,7 +9,7 @@ static := -llapacke -lblas -lgfortran -lm
 #-Wl,-Bstatic -Wl,-Bdynamic
 
 teste: ${so_file}
-	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015, 2015, 3);"
+	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_pci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015, 2015, 3);"
 #"SELECT euclidean_distance('chn', 'uni')"
 #"SELECT * FROM common_eci(array(SELECT (exporter, ARRAY[exporter])::cgroup FROM transaction WHERE year = 2015 GROUP BY exporter ORDER BY exporter), 2015);"
 #"SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 2015);"
