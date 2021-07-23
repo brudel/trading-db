@@ -118,7 +118,7 @@ void create_common_countrs_map(l_map *countrs_map, ArrayType* groups)
 	}
 }
 
-void create_prods_map(l_map *prods_map, int hs_digits)
+void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
 {
 	int count = 0;
 	bool is_null;
@@ -136,6 +136,10 @@ void create_prods_map(l_map *prods_map, int hs_digits)
 	if (status > 0 && SPI_tuptable != NULL)
 	{
 		TupleDesc tupdesc = SPI_tuptable->tupdesc;
+		prods_map->reserve(SPI_tuptable->numvals * 1.3);
+
+		if (index & PCI)
+			pm->prods = SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
 
 		//elog(INFO, "create prods: %d", SPI_tuptable->numvals);
 		for (int i = 0; i < SPI_tuptable->numvals; i++)
@@ -150,7 +154,10 @@ void create_prods_map(l_map *prods_map, int hs_digits)
 
 
 	//for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
-	//	elog(INFO, "prods[%.2s] = %d", it->first, it->second);
+	//	elog(INFO, "prods[%.6s] = %d", it->first, it->second);
+
+	//for (int i = 0; i < prods_map->bucket_count(); ++i)
+	//	elog(INFO, "prods[%d] = %d", i, prods_map->bucket_size(i));
 }
 
 void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
@@ -572,11 +579,11 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	SPI_connect();
 
 	l_map* countrs_map = new l_map(241 * 1.3, l_str(3), l_str(3));
-	l_map* prods_map = new l_map(5300, l_str(hs_digits), l_str(hs_digits));
+	l_map* prods_map = new l_map(0, l_str(hs_digits), l_str(hs_digits));
 	initick();
 	create_common_countrs_map(countrs_map, groups);
 	tick("countrs_map");
-	create_prods_map(prods_map, hs_digits);
+	create_prods_map(prods_map, hs_digits, pm, index);
 	tick("prods_map");
 	//elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
 
