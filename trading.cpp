@@ -145,9 +145,21 @@ void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t ind
 		for (int i = 0; i < SPI_tuptable->numvals; i++)
 		{
 			HeapTuple tuple = SPI_tuptable->vals[i];
+			char* prod = SBI_getString(tuple, tupdesc, 1, &is_null);
 
 			//elog(INFO, "count = %d", count);
-			prods_map->insert({{SBI_getString(tuple, tupdesc, 1, &is_null), count++}});
+			prods_map->insert({{prod, count++}});
+			//elog(INFO, "%d", i);
+
+			if (index & PCI)
+			{
+				text* prod_t = (text *) SPI_palloc(hs_digits + VARHDRSZ);
+				SET_VARSIZE(prod_t, hs_digits + VARHDRSZ);
+				memcpy(VARDATA_ANY(prod_t), prod, hs_digits);
+
+				pm->prods[i] = prod_t;
+				//prods_map->insert({VARDATA(prod_t), count++});
+			}
 		}
 	}
 	SPI_freetuptable(SPI_tuptable);
