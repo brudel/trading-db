@@ -13,12 +13,9 @@ PG_MODULE_MAGIC;
 #include <unordered_map>
 #include "text.h"
 
-//# Usar umas funções hash descentes
-//# Usar média de imp_val e exp_val em vez de só o segundo
 //# Retirar indicadores de erro antes da entrega final
 
-
-//#define PROFILE
+#define PROFILE
 
 #ifdef PROFILE
 extern "C" {
@@ -28,8 +25,8 @@ clock_t init_t;
 #define initick() init_t = clock();
 #define tick(label) elog(INFO, "Tempo " label ": %lf ms", (double) (clock() - init_t) * 1000 / CLOCKS_PER_SEC);
 #else
-#define tick(label)
 #define initick()
+#define tick(label)
 #endif
 
 #define BG_FUNCTION_INFO_V1(func) extern "C" { \
@@ -177,7 +174,8 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	tick("calc_X set");
 
 //GRUP BY make it a lot faster
-#define Q0 "SELECT exporter, left(product, 0), sum(exp_val) FROM transaction WHERE year "
+#define Q0 "SELECT exporter, left(product, 0),"\
+	" sum(COALESCE((exp_val + imp_val) / 2, exp_val, imp_val)) FROM transaction WHERE year "
 #define Q1 "= "
 #define Q2 ">= "
 #define Q3 " AND year <= "
@@ -242,10 +240,10 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 		//elog(INFO, "truple[%d]='%3s'", i, SBI_getString(tuple, tupdesc, 1, &is_null));
 		if (it == countrs_map->end())
 			continue;
-		//elog(INFO, "%d", i);
 
 		c = it->second;
 		p = (*prods_map)[SBI_getString(tuple, tupdesc, 2, &is_null)];
+		//elog(INFO, "%d %d", i, p);
 		//elog(INFO, "b");
 
 		double value = SBI_getDouble(tuple, tupdesc, 3, &is_null);
@@ -344,7 +342,7 @@ end_loop:
 }
 
 void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int n_total_prods,
- 	double X_total, char**_M, double* Mc, double* Mp)
+	double X_total, char**_M, double* Mc, double* Mp)
 {
 	double (*X)[n_total_prods] = (void*) _X;
 	char (*M)[n_prods] = (void*) _M;
@@ -544,10 +542,7 @@ void common_eci_init(FunctionCallInfo fcinfo)
 	//elog(INFO, "final first");
 }
 
-BG_FUNCTION_INFO_V1(common_eci);
-
-//groups cgroup[], start_year integer, end_year integer, hs_digit_pairs integer
-Datum common_eci(PG_FUNCTION_ARGS)
+Datum return_table(FunctionCallInfo fcinfo)
 {
 	FuncCallContext *funcctx;
 	HeapTuple ht;
@@ -556,31 +551,83 @@ Datum common_eci(PG_FUNCTION_ARGS)
 	bool isnull[2] = {false, false}, isNullAux;
 	perm_mem* pm;
 
-	//Primeira chamada: cálculo dos valores
-	if (SRF_IS_FIRSTCALL())
-		common_eci_init(fcinfo);
-
 	//Recupera contexto da chamada
 	funcctx = SRF_PERCALL_SETUP();
 	pm = (perm_mem*) funcctx->user_fctx;
 
-	//Encerra a última chamada
-	if (funcctx->call_cntr == *ARR_DIMS(PG_GETARG_ARRAYTYPE_P(0)))
-	{
-		array_free_iterator(pm->ar_it);
-		SRF_RETURN_DONE(funcctx);
-	}
+	elog(INFO, "ret %d", funcctx->call_cntr);
+	//if (index == ECI)
+	//{
+		//Encerra a última chamada
+		if (funcctx->call_cntr == *ARR_DIMS(PG_GETARG_ARRAYTYPE_P(0)))
+		{
+			array_free_iterator(pm->ar_it);
+			SRF_RETURN_DONE(funcctx);
+		}
 
-	//Cria resultados da chamada
-	array_iterate(pm->ar_it, &daux, &isNullAux);
-	hth = DatumGetHeapTupleHeader(daux);
-	dt[0] = GetAttributeByNum(hth, 1, &isNullAux);
+		//Cria resultados da chamada
+		array_iterate(pm->ar_it, &daux, &isNullAux);
+		hth = DatumGetHeapTupleHeader(daux);
+		dt[0] = GetAttributeByNum(hth, 1, &isNullAux);
+	//}
+	//else
+	/*{
+		//Encerra a última chamada
+		if (funcctx->call_cntr == pm->n_prods)
+		{
+			pfree(pm->prods);
+			SRF_RETURN_DONE(funcctx);
+		}
+
+		dt[0] = PointerGetDatum(pm->prods[funcctx->call_cntr]);
+	}*/
+		//elog(INFO, "a");
+		//elog(INFO, "K: %p %lf", pm->indexes, pm->indexes[0]);
+
 	dt[1] = Float8GetDatum(pm->ecis[funcctx->call_cntr]);
+		//elog(INFO, "a");
 
 	//Cria e retorna tupla
+		//elog(INFO, "a");
 	ht = heap_form_tuple(funcctx->tuple_desc, dt, isnull);
+		//elog(INFO, "a");
 	ret = HeapTupleGetDatum(ht);
+		//elog(INFO, "a");
 	SRF_RETURN_NEXT(funcctx, ret);
+}
+
+BG_FUNCTION_INFO_V1(common_eci);
+
+//groups cgroup[], start_year integer, end_year integer, hs_digit_pairs integer
+Datum common_eci(PG_FUNCTION_ARGS)
+{
+	if (SRF_IS_FIRSTCALL())
+		common_eci_init(fcinfo);
+
+	elog(INFO, "main");
+	return return_table(fcinfo);
+}
+
+BG_FUNCTION_INFO_V1(common_pci);
+
+Datum common_pci(PG_FUNCTION_ARGS)
+{
+	if (SRF_IS_FIRSTCALL())
+		common_eci_init(fcinfo);
+
+	return return_table(fcinfo);
+}
+
+BG_FUNCTION_INFO_V1(common_eci_pci);
+
+Datum common_eci_pci(PG_FUNCTION_ARGS)
+{
+	common_eci_init(fcinfo);
+
+	//perm_mem* pm = (perm_mem*) SRF_PERCALL_SETUP()->user_fctx;
+
+	//PG_RETURN_DATUM(pm->vecs_tuple);
+	return 0;
 }
 
 void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
@@ -594,7 +641,8 @@ void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
 			errmsg("hs_code must be 0, 2, 4 or 6 digits")
 		));
 
-#define Q0 "SELECT exporter, product, year, sum(exp_val) FROM transaction WHERE (exporter = '"
+#define Q0 "SELECT exporter, product, year, sum(COALESCE((exp_val + imp_val) / 2, exp_val, imp_val))"\
+	" FROM transaction WHERE (exporter = '"
 #define Q1 "' OR exporter = '"
 #define Q2 "')"
 #define Q3 " AND year >= "
@@ -671,7 +719,7 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 	if (!SPI_tuptable->numvals)
 	{
 		SPI_freetuptable(SPI_tuptable);
-    	SPI_finish();
+		SPI_finish();
 		PG_RETURN_FLOAT8(0.0);
 	}
 

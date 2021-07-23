@@ -97,13 +97,13 @@ struct l_str
 	bool operator()(char* a, char* b) const
 	{
 		if (n & 4 && *(int*)a != *(int*)b)
-			{if(n==2)elog(INFO, "'%.2s' vs '%.2s'", a, b);return false;}
+			{if(n==6)elog(INFO, "out0: '%.6s' vs '%.6s'", a, b);return false;}
 
 		if (n & 2 && ((short*)a)[(n & 4) >> 1] != ((short*)b)[(n & 4) >> 1])
-			{if(n==2)elog(INFO, "'%.2s' vs '%.2s'", a, b);return false;}
+			{if(n==6)elog(INFO, "out1: '%.6s' vs '%.6s'", a, b);return false;}
 
 		if (n & 1 && a[n & 6] != b[n & 6])
-			{if(n==2)elog(INFO, "'%.2s' vs '%.2s'", a, b);return false;}
+			{if(n==6)elog(INFO, "out2: '%.6s' vs '%.6s'", a, b);return false;}
 
 		return true;
 	}
@@ -121,6 +121,6 @@ struct l_str
 		if (n & 1)
 			hash = (hash << 8) | str[n & 6];
 
-		return hash * 31;
+		return hash * 31;//11400714819323198485;
 	}
 };
