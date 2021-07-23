@@ -443,11 +443,26 @@ void calc_Kc(double** W, int n_groups, double* K)
 	pfree(avtr);
 }
 
-void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
-	int f_year, int hs_digits, perm_mem* pm)
+void calc_Kp(double* Kc, int n_groups, int n_prods, char** _M, double* Mp, double* Kp)
+{
+	char (*M)[n_prods] = (void*) _M;
+
+	for (int j = 0; j < n_prods; ++j)
+		Kp[j] = M[0][j] ? Kc[0] : 0;
+
+	for (int i = 1; i < n_groups; ++i)
+		for (int j = 0; j < n_prods; ++j)
+			Kp[j] += M[i][j] ? Kc[i] : 0;
+
+	for (int j = 0; j < n_prods; ++j)
+		Kp[j] /= Mp[j];
+}
+
+void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
+	int f_year, int hs_digits, perm_mem* pm, index_t index)
 {
 	//# Mc e Mp podem virar int* 
-	double *Xc, *Xp, X_total = 0, *Mc, *Mp, *K;
+	double *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
 	int n_total_prods = prods_map->size();
 
 	double (*X)[n_total_prods] = palloc(sizeof(*X)*n_groups);
@@ -480,17 +495,39 @@ void calc_eci(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	double (*W)[n_groups] = palloc(sizeof(*W)*n_groups);
 
 	calc_W((char**) M, Mc, Mp, n_groups, prods_map->size(), (double**) W);
-	pfree(M);
 	pfree(Mc);
-	pfree(Mp);
+	if (index == ECI)
+	{
+		pfree(M);
+		pfree(Mp);
+	}
 	tick("calc_W");
 
-	K = SPI_palloc(sizeof(*K)*n_groups);
+	Kc = SPI_palloc(sizeof(*Kc)*n_groups);
 
-	calc_Kc((double**) W, n_groups, K);
+	calc_Kc((double**) W, n_groups, Kc);
+	pfree(W);
 	tick("calc_Kc");
 
-	pm->ecis = K;
+	if (index == ECI)
+	{
+		pm->indexes = Kc;
+		return;
+	}
+
+	Kp = SPI_palloc(sizeof(*Kp) * prods_map->size());
+
+	calc_Kp(Kc, n_groups, prods_map, (char**) M, Mp, Kp);
+	tick("calc_Kp");
+	pfree(M);
+	pfree(Mp);
+
+	if (index == PCI)
+	{
+		SPI_pfree(Kc);
+		pm->indexes = Kp;
+		return;
+	}
 }
 
 void common_index_init(FunctionCallInfo fcinfo, index_t index)
@@ -528,12 +565,13 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	pm = (perm_mem*) palloc(sizeof(perm_mem));
 	funcctx->user_fctx = pm;
 
-	pm->ar_it = array_create_iterator(groups, 0, mstate);
+	if (index == ECI)
+		pm->ar_it = array_create_iterator(groups, 0, mstate);
 
-	//Calcula ECI
+	//Calcula índices
 	SPI_connect();
 
-	l_map* countrs_map = new l_map(241, l_str(3), l_str(3));
+	l_map* countrs_map = new l_map(241 * 1.3, l_str(3), l_str(3));
 	l_map* prods_map = new l_map(5300, l_str(hs_digits), l_str(hs_digits));
 	initick();
 	create_common_countrs_map(countrs_map, groups);
@@ -542,9 +580,9 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	tick("prods_map");
 	//elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
 
-	calc_eci(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1),
-		PG_GETARG_INT32(2), hs_digits, pm);
-	tick("calc_eci");
+	calc_indexes(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1),
+		PG_GETARG_INT32(2), hs_digits, pm, index);
+	tick("calc_indexes");
 
 	delete prods_map, countrs_map;
 	SPI_finish();
