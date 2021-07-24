@@ -54,7 +54,7 @@ typedef struct perm_mem {
 		SPI_getbinval(tuple, tupdesc, col, is_null) \
 	)
 
-#define PMYSTRING_INIT(mstr, n) mstr = palloc(n); \
+#define PMYSTRING_INIT(mstr, n) mstr = (mystring*) palloc(n); \
 mstr->len = 0;
 
 typedef std::unordered_map<char*, int, l_str, l_str> l_map;
@@ -120,11 +120,10 @@ void create_common_countrs_map(l_map *countrs_map, ArrayType* groups)
 
 void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
 {
-	int count = 0;
 	bool is_null;
 
 #define Q "SELECT DISTINCT left(hs_code, 0) FROM product"
-	char* query = palloc(sizeof(Q));
+	char* query = (char*) palloc(sizeof(Q));
 	memcpy(query, Q, sizeof(Q));
 	query[30] |= hs_digits;
 #undef Q
@@ -139,7 +138,7 @@ void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t ind
 		prods_map->reserve(SPI_tuptable->numvals * 1.3);
 
 		if (index & PCI)
-			pm->prods = SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
+			pm->prods = (text**) SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
 
 		//elog(INFO, "create prods: %d", SPI_tuptable->numvals);
 		for (int i = 0; i < SPI_tuptable->numvals; i++)
@@ -147,18 +146,18 @@ void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t ind
 			HeapTuple tuple = SPI_tuptable->vals[i];
 			char* prod = SBI_getString(tuple, tupdesc, 1, &is_null);
 
-			//elog(INFO, "count = %d", count);
-			prods_map->insert({{prod, count++}});
+			//elog(INFO, "i = %d", i);
+			prods_map->insert({{prod, i}});
 			//elog(INFO, "%d", i);
 
 			if (index & PCI)
-			{
-				text* prod_t = (text *) SPI_palloc(hs_digits + VARHDRSZ);
+			{//# Usar para o mapa também
+				text* prod_t = (text*) SPI_palloc(hs_digits + VARHDRSZ);
 				SET_VARSIZE(prod_t, hs_digits + VARHDRSZ);
 				memcpy(VARDATA_ANY(prod_t), prod, hs_digits);
 
 				pm->prods[i] = prod_t;
-				//prods_map->insert({VARDATA(prod_t), count++});
+				//prods_map->insert({VARDATA(prod_t), i});
 			}
 		}
 	}
@@ -175,7 +174,7 @@ void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t ind
 void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	int f_year, int hs_digits, double** _X, double* Xp, double* Xc)
 {
-	double (*X)[prods_map->size()] = (void*)_X;
+	double (*X)[prods_map->size()] = (decltype(X))_X;
 	int c, p;
 	bool is_null;
 
@@ -290,8 +289,8 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 {
 	//elog(INFO, "Entro");
 	int n_total_prods = prods_map->size(), count = 0, idx, m_count, aux;
-	double (*X)[n_total_prods] = (void*)_X;
-	int* eliminated = palloc(sizeof(*eliminated)* n_total_prods), *moved;
+	double (*X)[n_total_prods] = (decltype(X))_X;
+	int* eliminated = (int*) palloc(sizeof(*eliminated)* n_total_prods), *moved;
 
 	//Identifica
 	for (int i = 0; i < n_total_prods; ++i)
@@ -304,7 +303,7 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 
 
 	//Cria moved[]
-	moved = palloc(sizeof(*eliminated) * count);
+	moved = (int*) palloc(sizeof(*eliminated) * count);
 
 	m_count = 0;
 	aux = n_total_prods - count; //Menor a ser movid
@@ -372,8 +371,8 @@ end_loop:
 void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int n_total_prods,
 	double X_total, char**_M, double* Mc, double* Mp)
 {
-	double (*X)[n_total_prods] = (void*) _X;
-	char (*M)[n_prods] = (void*) _M;
+	double (*X)[n_total_prods] = (decltype(X)) _X;
+	char (*M)[n_prods] = (decltype(M)) _M;
 
 	Mc[0] = 0;
 	for (int j = 0; j < n_prods; ++j)
@@ -400,8 +399,8 @@ void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int 
 
 void calc_W(char**_M, double* Mc, double* Mp, int n_groups, int n_prods, double** _W)
 {
-	char (*M)[n_prods] = (void*) _M;
-	double (*W)[n_groups] = (void*) _W;
+	char (*M)[n_prods] = (decltype(M)) _M;
+	double (*W)[n_groups] = (decltype(W)) _W;
 
 	#pragma omp parallel for
 	//Dava pra pular produtos que um país não tem especialidade
@@ -422,9 +421,9 @@ void calc_W(char**_M, double* Mc, double* Mp, int n_groups, int n_prods, double*
 void calc_Kc(double** W, int n_groups, double* K)
 {
 	double mean = 0, sum_quad = 0, stdev;
-	double* avlr = palloc(sizeof(*avlr)*n_groups);
-	double* avli = palloc(sizeof(*avli)*n_groups);
-	double (*avtr)[n_groups] = palloc(sizeof(*avtr)*n_groups);
+	double* avlr = (double*) palloc(sizeof(*avlr) * n_groups);
+	double* avli = (double*) palloc(sizeof(*avli) * n_groups);
+	double (*avtr)[n_groups] = (decltype(avtr)) palloc(sizeof(*avtr) * n_groups);
 
 	int info = LAPACKE_dgeev(LAPACK_ROW_MAJOR, 'N', 'V', n_groups, (double*)W, n_groups, avlr, avli, NULL, n_groups, (double*)avtr, n_groups);
 	//elog(INFO, "info %d", info);
@@ -464,7 +463,7 @@ void calc_Kc(double** W, int n_groups, double* K)
 
 void calc_Kp(double* Kc, int n_groups, int n_prods, char** _M, double* Mp, double* Kp)
 {
-	char (*M)[n_prods] = (void*) _M;
+	char (*M)[n_prods] = (decltype(M)) _M;
 
 	for (int j = 0; j < n_prods; ++j)
 		Kp[j] = M[0][j] ? Kc[0] : 0;
@@ -484,9 +483,9 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	double *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
 	int n_total_prods = prods_map->size();
 
-	double (*X)[n_total_prods] = palloc(sizeof(*X)*n_groups);
-	Xc = palloc(sizeof(*Xc)*n_groups);
-	Xp = palloc(sizeof(*Xp)*n_total_prods);
+	double (*X)[n_total_prods] = (decltype(X)) palloc(sizeof(*X) * n_groups);
+	Xc = (double*) palloc(sizeof(*Xc) * n_groups);
+	Xp = (double*) palloc(sizeof(*Xp) * n_total_prods);
 
 	calc_X(countrs_map, n_groups, prods_map, s_year, f_year, hs_digits, (double**) X, Xp, Xc);
 	tick("calc_X");
@@ -497,9 +496,9 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	for (int i = 0; i < n_groups; ++i)
 		X_total += Xc[i];
 
-	char (*M)[prods_map->size()] = palloc(sizeof(*M)*n_groups);
-	Mc = palloc(sizeof(*Mc)*n_groups);
-	Mp = palloc(sizeof(*Mp)*prods_map->size());
+	char (*M)[prods_map->size()] = (decltype(M)) palloc(sizeof(*M) * n_groups);
+	Mc = (double*) palloc(sizeof(*Mc) * n_groups);
+	Mp = (double*) palloc(sizeof(*Mp) * prods_map->size());
 	//# Conferir valores de Xc e Xp
 
 	calc_M((double**) X, Xp, Xc, n_groups, prods_map->size(), n_total_prods,
@@ -512,7 +511,7 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	/*for (int i = 0; i < n_groups; ++i)
 		elog(INFO, "Mc[%d]: %lf", i, Mc[i]);*/
 
-	double (*W)[n_groups] = palloc(sizeof(*W)*n_groups);
+	double (*W)[n_groups] = (decltype(W)) palloc(sizeof(*W) * n_groups);
 
 	calc_W((char**) M, Mc, Mp, n_groups, prods_map->size(), (double**) W);
 	pfree(Mc);
@@ -523,7 +522,7 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	}
 	tick("calc_W");
 
-	Kc = SPI_palloc(sizeof(*Kc)*n_groups);
+	Kc = (double*) SPI_palloc(sizeof(*Kc) * n_groups);
 
 	calc_Kc((double**) W, n_groups, Kc);
 	pfree(W);
@@ -535,9 +534,9 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 		return;
 	}
 
-	Kp = SPI_palloc(sizeof(*Kp) * prods_map->size());
+	Kp = (double*) SPI_palloc(sizeof(*Kp) * prods_map->size());
 
-	calc_Kp(Kc, n_groups, prods_map, (char**) M, Mp, Kp);
+	calc_Kp(Kc, n_groups, prods_map->size(), (char**) M, Mp, Kp);
 	tick("calc_Kp");
 	pfree(M);
 	pfree(Mp);
@@ -558,6 +557,7 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	ArrayMetaState *mstate = NULL;
 	ArrayType* groups = PG_GETARG_ARRAYTYPE_P(0);
 	int hs_digits = PG_GETARG_INT32(3);
+	MemoryContext original_context;
 
 	//Validate args
 	if (hs_digits > 3 || hs_digits < 1)
@@ -571,6 +571,7 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 
 	//Cria contexto de chamada
 	funcctx = SRF_FIRSTCALL_INIT();
+	original_context = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
 	//Identifica tipo de retorno
 	if (get_call_result_type(fcinfo, NULL, &td) != TYPEFUNC_COMPOSITE)
@@ -606,6 +607,7 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 
 	delete prods_map, countrs_map;
 	SPI_finish();
+	MemoryContextSwitchTo(original_context);
 	//elog(INFO, "final first");
 }
 
@@ -622,7 +624,6 @@ Datum return_table(FunctionCallInfo fcinfo, index_t index)
 	funcctx = SRF_PERCALL_SETUP();
 	pm = (perm_mem*) funcctx->user_fctx;
 
-	elog(INFO, "ret %d", funcctx->call_cntr);
 	if (index == ECI)
 	{
 		//Encerra a última chamada
@@ -643,20 +644,18 @@ Datum return_table(FunctionCallInfo fcinfo, index_t index)
 		if (funcctx->call_cntr == pm->n_prods)
 			SRF_RETURN_DONE(funcctx);
 
+			//text* debug_t = palloc(VARHDRSZ + 6);
+			//SET_VARSIZE(debug_t, VARHDRSZ + 6);
+			//memcpy(VARDATA_ANY(debug_t), "IHMOI0", 6);
 		dt[0] = PointerGetDatum(pm->prods[funcctx->call_cntr]);
 	}
-		//elog(INFO, "a");
-		//elog(INFO, "K: %p %lf", pm->indexes, pm->indexes[0]);
+	//elog(INFO, "K: %p %lf", pm->indexes, pm->indexes[0]);
 
 	dt[1] = Float8GetDatumFast(pm->indexes[funcctx->call_cntr]);
-		//elog(INFO, "a");
 
 	//Cria e retorna tupla
-		//elog(INFO, "a");
 	ht = heap_form_tuple(funcctx->tuple_desc, dt, isnull);
-		//elog(INFO, "a");
 	ret = HeapTupleGetDatum(ht);
-		//elog(INFO, "a");
 	SRF_RETURN_NEXT(funcctx, ret);
 }
 
@@ -668,7 +667,6 @@ Datum common_eci(PG_FUNCTION_ARGS)
 	if (SRF_IS_FIRSTCALL())
 		common_index_init(fcinfo, ECI);
 
-	elog(INFO, "main");
 	return return_table(fcinfo, ECI);
 }
 
