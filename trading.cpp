@@ -3,19 +3,20 @@ extern "C" {
 #include "fmgr.h" //Module magic
 #include "funcapi.h" //Return row
 #include "utils/array.h" //Coisas de array
+#include "utils/lsyscache.h" //get_typlenbyvalalign
 #include "executor/spi.h" //SPI
 #include <lapacke.h> //AlgeLin
-#include <omp.h>
+#include <omp.h> //Paralelização
 
 PG_MODULE_MAGIC;
 }
 
 #include <unordered_map>
-#include "text.h"
+#include "utils.h"
 
 //# Retirar indicadores de erro antes da entrega final
 
-#define PROFILE
+//#define PROFILE
 
 #ifdef PROFILE
 extern "C" {
@@ -34,11 +35,11 @@ PG_FUNCTION_INFO_V1(func); \
 }
 
 typedef struct perm_mem {
-	ArrayIterator ar_it;
-	int n_prods;
-	text** prods;
-	double* indexes;
-	Datum vecs_tuple;
+	ArrayIterator ar_it; // eci e eci_pci
+	int n_prods; // pci e eci_pci
+	text** prods; // pci e eci_pci
+	double* indexes; // eci e pci
+	Datum vecs_tuple; // eci_pci
 } perm_mem;
 
 #define SBI_getString(tuple, tupdesc, col, is_null) (char*) \
@@ -65,33 +66,6 @@ enum index_t {
 	ECI_PCI
 };
 
-
-void create_all_countrs_map(l_map *countrs_map)
-{
-	//# Usar variável global SPI_tuptable e desalocar depois
-	int count = 0;
-	bool is_null;
-
-	int status = SPI_execute(
-		"SELECT code "
-		"FROM country ",
-		true, 0);
-
-
-	if (status > 0 && SPI_tuptable != NULL)
-	{
-		SPITupleTable *tuptable = SPI_tuptable;
-		TupleDesc tupdesc = tuptable->tupdesc;
-
-		for (int i = 0; i < tuptable->numvals; i++)
-		{
-			HeapTuple tuple = tuptable->vals[i];
-
-			countrs_map->insert({SBI_getString(tuple, tupdesc, 1, &is_null), ++count});
-		}
-	}
-}
-
 void create_common_countrs_map(l_map *countrs_map, ArrayType* groups)
 {
 	int count = 0;
@@ -101,8 +75,8 @@ void create_common_countrs_map(l_map *countrs_map, ArrayType* groups)
 	bool is_null;
 	text* taux;
 
-	ArrayIterator itg = array_create_iterator(groups, 0, NULL);
-	while (array_iterate(itg, &daux, &is_null))
+	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
+	while (array_iterate(itv, &daux, &is_null))
 	{
 		hth = DatumGetHeapTupleHeader(daux);
 		members = DatumGetArrayTypeP(GetAttributeByNum(hth, 2, &is_null));
@@ -343,7 +317,7 @@ void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
 			//elog(INFO, "\tinter");
 
 			if (idx == -1)
-				elog(INFO, "DEU MERDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA AQUI Ó: %d", it->second);
+				elog(INFO, "Erro ao mover produto %d para baixo na matriz", it->second);
 
 
 			Xp[eliminated[idx]] = Xp[it->second];
@@ -361,7 +335,7 @@ end_loop:
 
 	for (int i = 0; i < prods_map->size(); ++i)
 		if (Xp[i] == 0)
-			elog(INFO, "Deu merda");
+			elog(INFO, "Erro na remoção de produtos não comercializados.");
 
 	//elog(INFO, "NULLs: %d", count);
 	pfree(eliminated);
@@ -425,7 +399,8 @@ void calc_Kc(double** W, int n_groups, double* K)
 	double* avli = (double*) palloc(sizeof(*avli) * n_groups);
 	double (*avtr)[n_groups] = (decltype(avtr)) palloc(sizeof(*avtr) * n_groups);
 
-	int info = LAPACKE_dgeev(LAPACK_ROW_MAJOR, 'N', 'V', n_groups, (double*)W, n_groups, avlr, avli, NULL, n_groups, (double*)avtr, n_groups);
+	int info = LAPACKE_dgeev(LAPACK_ROW_MAJOR, 'N', 'V', n_groups, (double*)W,
+		n_groups, avlr, avli, NULL, n_groups, (double*)avtr, n_groups);
 	//elog(INFO, "info %d", info);
 
 	int max = 1;
@@ -442,19 +417,10 @@ void calc_Kc(double** W, int n_groups, double* K)
 
 	for (int i = 0; i < n_groups; ++i)
 		elog(INFO, "Eigenvvector[%d][%d]: %lf", i, 0, avtr[i][0]);
-*/
+*/	
 
 	for (int i = 0; i < n_groups; ++i)
-	{
-		mean += avtr[i][max];
-		sum_quad += avtr[i][max] * avtr[i][max];
-	}
-	mean = mean / n_groups;
-	stdev = sqrt((sum_quad - mean * mean * n_groups) / n_groups);
-	
-
-	for (int i = 0; i < n_groups; ++i)
-		K[i] = (avtr[i][max] - mean) / stdev;
+		K[i] = avtr[i][max];
 
 	pfree(avlr);
 	pfree(avli);
@@ -476,8 +442,80 @@ void calc_Kp(double* Kc, int n_groups, int n_prods, char** _M, double* Mp, doubl
 		Kp[j] /= Mp[j];
 }
 
+/*void teste()
+{
+	ArrayType* arr = palloc0(ARR_OVERHEAD_NONULLS(1) + n_groups * );
+	arr->ndim = 1;
+	arr->dataoffset = 0;
+	arr->elemtype = td->Oid;
+	ARR_DIMS(arr)[0] = n_groups;
+	ARR_DIMS(arr)[1] = 1; // lower bound[0] hard coded
+	char* data = ARR_DIMS(arr) + 2;
+
+	len = VARSIZE_ANY(ht);
+	memcpy(data, ht, len);
+	data += len;
+	data = att_align_nominal(data, MAXIMUM_ALIGNOF);
+}*/
+
+void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
+		perm_mem* pm, TupleDesc call_td)
+{
+	elog(INFO, "pack");
+	short elmlen;
+	bool elmbyval;
+	char elmalign;
+	Datum data[2], daux, *elems;
+	int len;
+	HeapTupleHeader hth;
+	bool isnull[] = {false, false}, isNullAux;
+	ArrayType* arr;
+	TupleDesc td;
+
+	elems = (Datum*) palloc(sizeof(*elems) * MAX(n_groups, n_prods));
+	td = RelationNameGetTupleDesc("eciout");
+	elog(INFO, "%d", td->tdtypeid);
+
+	for (int i = 0; i < n_groups; ++i)
+	{
+		array_iterate(pm->ar_it, &daux, &isNullAux);
+		hth = DatumGetHeapTupleHeader(daux);
+
+		data[0] = GetAttributeByNum(hth, 1, &isNullAux);
+		data[1] = Float8GetDatumFast(Kc[i]);
+		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull));
+	}
+
+	get_typlenbyvalalign(td->tdtypeid, &elmlen, &elmbyval, &elmalign);
+	arr = construct_array(elems, n_groups, td->tdtypeid, elmlen, elmbyval, elmalign);
+	//arr = construct_empty_array(td->tdtypeid);
+	elog(INFO, "arr 0");
+
+	td = RelationNameGetTupleDesc("pciout");
+	elog(INFO, "%d", td->tdtypeid);
+
+	for (int i = 0; i < n_prods; ++i)
+	{
+		data[0] = PointerGetDatum(pm->prods[i]);
+		data[1] = Float8GetDatumFast(Kp[i]);
+		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull));
+	}
+
+	get_typlenbyvalalign(td->tdtypeid, &elmlen, &elmbyval, &elmalign);
+	data[1] = PointerGetDatum(construct_array(elems, n_prods, td->tdtypeid,
+		elmlen, elmbyval, elmalign));
+	elog(INFO, "arr 1");
+
+	data[0] = PointerGetDatum(arr);
+	//data[1] = PointerGetDatum(construct_empty_array(td->tdtypeid));
+	elog(INFO, "%d", call_td->tdtypeid);
+	pm->vecs_tuple = HeapTupleGetDatum(heap_form_tuple(call_td, data, isnull));
+	elog(INFO, "packed");
+}
+
 void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
-	int f_year, int hs_digits, perm_mem* pm, index_t index)
+	int f_year, int hs_digits, perm_mem* pm, index_t index,
+	FuncCallContext* funcctx, MemoryContext original_context)
 {
 	//# Mc e Mp podem virar int* 
 	double *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
@@ -491,7 +529,6 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	tick("calc_X");
 	filter_products(Xp, (double**) X, n_groups, prods_map);
 	tick("filter_products");
-	pm->n_prods = prods_map->size();
 
 	for (int i = 0; i < n_groups; ++i)
 		X_total += Xc[i];
@@ -530,6 +567,7 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 
 	if (index == ECI)
 	{
+		z_transform(Kc, n_groups);
 		pm->indexes = Kc;
 		return;
 	}
@@ -544,9 +582,20 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	if (index == PCI)
 	{
 		SPI_pfree(Kc);
+
+		z_transform(Kp, prods_map->size());
 		pm->indexes = Kp;
+
+		pm->n_prods = prods_map->size();
 		return;
 	}
+
+	//ECI_PCI
+	z_transform(Kc, n_groups);
+	z_transform(Kp, prods_map->size());
+	//MemoryContext old_contex = MemoryContextSwitchTo(original_context);
+	pack_indexes(Kc, n_groups, Kp, prods_map->size(), pm, funcctx->tuple_desc);
+	//MemoryContextSwitchTo(old_contex);
 }
 
 void common_index_init(FunctionCallInfo fcinfo, index_t index)
@@ -554,7 +603,6 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	FuncCallContext *funcctx;
 	perm_mem* pm;
 	TupleDesc td;
-	ArrayMetaState *mstate = NULL;
 	ArrayType* groups = PG_GETARG_ARRAYTYPE_P(0);
 	int hs_digits = PG_GETARG_INT32(3);
 	MemoryContext original_context;
@@ -586,8 +634,8 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	pm = (perm_mem*) palloc(sizeof(perm_mem));
 	funcctx->user_fctx = pm;
 
-	if (index == ECI)
-		pm->ar_it = array_create_iterator(groups, 0, mstate);
+	if (index & ECI)
+		pm->ar_it = array_create_iterator(groups, 0, NULL);
 
 	//Calcula índices
 	SPI_connect();
@@ -688,6 +736,7 @@ Datum common_eci_pci(PG_FUNCTION_ARGS)
 
 	perm_mem* pm = (perm_mem*) SRF_PERCALL_SETUP()->user_fctx;
 
+	elog(INFO, "Vai sai");
 	PG_RETURN_DATUM(pm->vecs_tuple);
 }
 

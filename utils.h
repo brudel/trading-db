@@ -1,4 +1,7 @@
+#include <cstring>
 
+
+#define MAX(X, Y) ((X) < (Y) ? (X) : (Y))
 // For hardcoded strings
 #define litcat(lit) concat(lit, sizeof(lit) - 1)
 
@@ -97,13 +100,13 @@ struct l_str
 	bool operator()(char* a, char* b) const
 	{
 		if (n & 4 && *(int*)a != *(int*)b)
-			{if(n==6)elog(INFO, "out0: '%.6s' vs '%.6s'", a, b);return false;}
+			return false;
 
 		if (n & 2 && ((short*)a)[(n & 4) >> 1] != ((short*)b)[(n & 4) >> 1])
-			{if(n==6)elog(INFO, "out1: '%.6s' vs '%.6s'", a, b);return false;}
+			return false;
 
 		if (n & 1 && a[n & 6] != b[n & 6])
-			{if(n==6)elog(INFO, "out2: '%.6s' vs '%.6s'", a, b);return false;}
+			return false;
 
 		return true;
 	}
@@ -121,6 +124,23 @@ struct l_str
 		if (n & 1)
 			hash = (hash << 8) | str[n & 6];
 
-		return hash * 31;//11400714819323198485;
+		return hash * 9973; //31	9973	11400714819323198485
 	}
 };
+
+void z_transform(double* vec, int n)
+{
+	double mean = 0, sum_quad = 0, stdev;
+
+	for (int i = 0; i < n; ++i)
+	{
+		mean += vec[i];
+		sum_quad += vec[i] * vec[i];
+	}
+
+	mean = mean / n;
+	stdev = sqrt((sum_quad - mean * mean * n) / n);
+
+	for (int i = 0; i < n; ++i)
+		vec[i] = (vec[i] - mean) / stdev;
+}
