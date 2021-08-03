@@ -66,7 +66,7 @@ enum index_t {
 	ECI_PCI
 };
 
-void create_common_countrs_map(l_map *countrs_map, ArrayType* groups)
+void create_countrs_map(l_map *countrs_map, ArrayType* groups)
 {
 	int count = 0;
 	Datum daux;
@@ -92,8 +92,9 @@ void create_common_countrs_map(l_map *countrs_map, ArrayType* groups)
 	}
 }
 
-void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
+int create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
 {
+	int n;
 	bool is_null;
 
 #define Q "SELECT DISTINCT left(hs_code, 0) FROM product"
@@ -115,7 +116,8 @@ void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t ind
 			pm->prods = (text**) SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
 
 		//elog(INFO, "create prods: %d", SPI_tuptable->numvals);
-		for (int i = 0; i < SPI_tuptable->numvals; i++)
+		n = SPI_tuptable->numvals;
+		for (int i = 0; i < n; i++)
 		{
 			HeapTuple tuple = SPI_tuptable->vals[i];
 			char* prod = SBI_getString(tuple, tupdesc, 1, &is_null);
@@ -143,17 +145,118 @@ void create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t ind
 
 	//for (int i = 0; i < prods_map->bucket_count(); ++i)
 	//	elog(INFO, "prods[%d] = %d", i, prods_map->bucket_size(i));
+
+	return n;
 }
 
-void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
-	int f_year, int hs_digits, double** _X, double* Xp, double* Xc)
+void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 {
-	double (*X)[prods_map->size()] = (decltype(X))_X;
-	int c, p;
-	bool is_null;
+	int status;
+	mystring* query;
+
+//GRUP BY make it a lot faster
+#define QEXP "exporter"
+#define QC_G "c_group"
+
+#define QSELECT "SELECT "
+#define QSCOLUMNS ", left(product, 0),"\
+	" sum(COALESCE((exp_val + imp_val) / 2, exp_val, imp_val)) FROM transaction "
+#define QJOIN "JOIN country_group_belonging ON " \
+	"(exporter = country AND year >= entry_year AND (exit_year IS NULL OR year < exit_year)) "
+// Possivelmente adicionar restrição c_name in na cláusula do join
+#define QWHERE "WHERE year "
+#define QWEQ "= "
+#define QWGE ">= "
+#define QWFYEAR " AND year <= "
+#define QGROUP " GROUP BY "
+#define QGPROD ", left(product, 0)"
+
+	PMYSTRING_INIT(query, sizeof(QSELECT) + 2 * MAX(sizeof(QEXP) - 1,
+		sizeof(QC_G) - 1) + sizeof(QSCOLUMNS) + sizeof(QJOIN) + sizeof(QWHERE)
+		+ MAX(sizeof(QWEQ) + MAXINTSIZE - 1, sizeof(QWGE) + sizeof(QWFYEAR) +
+		2 * MAXINTSIZE - 2) + sizeof(QGROUP) + sizeof(QGPROD) - 5);
+	// -1 para cada string literal sem \0
+
+	query->litcat(QSELECT);
+
+	if (c_groups)
+		query->litcat(QC_G);
+	else
+		query->litcat(QEXP);
+
+	query->litcat(QSCOLUMNS);
+	query->data[query->len - 78] |= hs_digits;
+
+	if (c_groups)
+		query->litcat(QJOIN);
+
+	query->litcat(QWHERE);
+
+	if (f_year == 0)
+	{
+		query->litcat(QWEQ);
+		query->concat(s_year);
+	}
+	else
+	{
+		query->litcat(QWGE);
+		query->concat(s_year);
+		query->litcat(QWFYEAR);
+		query->concat(f_year);
+	}
+
+	query->litcat(QGROUP);
+
+	if (c_groups)
+		query->litcat(QC_G);
+	else
+		query->litcat(QEXP);
+
+	query->concat(QGPROD, sizeof(QGPROD));
+	query->data[query->len - 3] |= hs_digits;
+
+#undef QEXP
+#undef QC_G
+#undef QSELECT
+#undef QSCOLUMNS
+#undef QJOIN
+#undef QWHERE
+#undef QWEQ
+#undef QWGE
+#undef QWFYEAR
+#undef QGROUP
+#undef QGPROD
+
+	//elog(INFO, "query: %s", query->data);
+	status = SPI_execute(query->data, true, 0);
+	pfree(query);
+
+	if (status <= 0 && SPI_tuptable == NULL)
+		elog(ERROR, "falha ao consultar o bd");
+}
+
+int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
+	double*** _X, double** _Xp, double** _Xc, perm_mem* pm, index_t index)
+{
+	double *Xc, *Xp;
+	int c, p, n_prods, n_groups = ARR_DIMS(groups)[0];
+	bool is_null, c_groups = groups->elemtype == TEXTOID;
+
+	l_map* countrs_map = new l_map(241 * 1.3, l_str(3), l_str(3));
+	l_map* prods_map = new l_map(0, l_str(hs_digits), l_str(hs_digits));
+	create_countrs_map(countrs_map, groups);
+	tick("countrs_map");
+	n_prods = create_prods_map(prods_map, hs_digits, pm, index);
+	tick("prods_map");
+
+	double (*X)[n_prods] = (decltype(X)) palloc(sizeof(*X) * n_groups);
+	*_X = (double**) X;
+	*_Xc = Xc = (double*) palloc(sizeof(*Xc) * n_groups);
+	*_Xp = Xp = (double*) palloc(sizeof(*Xp) * n_prods);
+
 
 	//Primeira iteração do for em seguida, mas iniciando Xp
-	for (int i = 0; i < prods_map->size(); ++i)
+	for (int i = 0; i < n_prods; ++i)
 	{
 		X[0][i] = 0;
 		Xp[i] = 0;
@@ -164,60 +267,17 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 	for (int i = 1; i < n_groups; ++i)
 	{
 		//elog(INFO, "Bucket[%d] > %d", i, countrs_map->bucket_size(i));
-		for (int j = 0; j < prods_map->size(); ++j)
+		for (int j = 0; j < n_prods; ++j)
 			X[i][j] = 0;
 
 		Xc[i] = 0;
 	}
+	tick("calc_X set");
 
 	//elog(INFO, "Total %d", countrs_map->bucket_count());
 
-	tick("calc_X set");
-
-//GRUP BY make it a lot faster
-#define Q0 "SELECT exporter, left(product, 0),"\
-	" sum(COALESCE((exp_val + imp_val) / 2, exp_val, imp_val)) FROM transaction WHERE year "
-#define Q1 "= "
-#define Q2 ">= "
-#define Q3 " AND year <= "
-#define Q4 " GROUP BY exporter, left(product, 0)"
-
-	mystring* PMYSTRING_INIT(query, 1000);
-
-	query->litcat(Q0);
-	query->data[31] |= hs_digits;
-
-	if (f_year == 0)
-	{
-		query->litcat(Q1);
-		query->concat(s_year);
-	}
-	else
-	{
-		query->litcat(Q2);
-		query->concat(s_year);
-		query->litcat(Q3);
-		query->concat(f_year);
-	}
-
-	query->concat(Q4, sizeof(Q4));
-	query->data[query->len - 3] |= hs_digits;
-
-#undef Q0
-#undef Q1
-#undef Q2
-#undef Q3
-#undef Q4
-
-	//elog(INFO, "query: %s", query->data);
-	int status = SPI_execute(query->data, true, 0);
-	pfree(query);
-
-
+	calc_X_common_query(s_year, f_year, hs_digits, c_groups);
 	tick("SPI_execute");
-
-	if (status <= 0 && SPI_tuptable == NULL)
-		return;
 
 	TupleDesc tupdesc = SPI_tuptable->tupdesc;
 /*
@@ -256,90 +316,84 @@ void calc_X(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
 		//elog(INFO, "c");
 	}
 	SPI_freetuptable(SPI_tuptable);
+
+	return n_prods;
 }
 
+//# Não vai precisar mudar o mapa
 //# Se usar valor mínimo > 0 vai precisar ajustar Xc pra tirar os produtos excluídos
-void filter_products(double* Xp, double** _X, int n_groups, l_map* prods_map)
+int filter_products(double* Xp, double** _X, text** prods, int n_groups, int n_prods, index_t index)
 {
 	//elog(INFO, "Entro");
-	int n_total_prods = prods_map->size(), count = 0, idx, m_count, aux;
-	double (*X)[n_total_prods] = (decltype(X))_X;
-	int* eliminated = (int*) palloc(sizeof(*eliminated)* n_total_prods), *moved;
+	int count = 0, idx, m_count, aux;
+	double (*X)[n_prods] = (decltype(X)) _X;
+	int* eliminated = (int*) palloc(sizeof(*eliminated)* n_prods), *moved;
 
 	//Identifica
-	for (int i = 0; i < n_total_prods; ++i)
+	for (int i = 0; i < n_prods; ++i)
 		if (Xp[i] == 0)
 			eliminated[count++] = i;
 
 	if (count == 0)
-		return;
+		return n_prods;
 	//elog(INFO, "Identifico");
 
-
-	//Cria moved[]
-	moved = (int*) palloc(sizeof(*eliminated) * count);
-
+		// Prepara variáveis para o loops
 	m_count = 0;
-	aux = n_total_prods - count; //Menor a ser movid
+	aux = n_prods - count; //Menor a ser movido
 
 	idx = count;
 	while (eliminated[--idx] >= aux); //Index do menor removido do intervalo dos movidos
-	//elog(INFO, "idx: %d count: %d aux: %d", idx, count, aux);
-
+	
+	// Pula removidos entre os últimos
+	// idx itera sobre os removidos entre os últios
+	// aux itera sobre todos os últimos
+	// m_count itera sobre os removidos
 	for (; ++idx < count; ++aux)
 		while (aux != eliminated[idx])
-			moved[m_count++] = aux++;
-
-	while (aux < n_total_prods)
-		moved[m_count++] = aux++;
-
-	aux = n_total_prods - count;
-
-	//Substituí
-	for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
-	{
-		//elog(INFO, "for in");
-		while (idx = interpolation_search(eliminated, count, it->second) >= 0)
 		{
-			//elog(INFO, "while in");
-			it = prods_map->erase(it);
-			if (it == prods_map->end())
-				goto end_loop;
-			//elog(INFO, "while out");
-		}
+			Xp[eliminated[m_count]] = Xp[aux];
 
-		//elog(INFO, "for mid");
-
-		if (it->second >= aux)
-		{
-			//elog(INFO, "if in");
-			idx = interpolation_search(moved, m_count, it->second);
-			//elog(INFO, "\tinter");
-
-			if (idx == -1)
-				elog(INFO, "Erro ao mover produto %d para baixo na matriz", it->second);
-
-
-			Xp[eliminated[idx]] = Xp[it->second];
-			//elog(INFO, "\tatrib");
+			if (index & PCI)
+			{
+				SPI_pfree(prods[eliminated[m_count]]);
+				prods[eliminated[m_count]] = prods[aux];
+			}
 
 			for (int i = 0; i < n_groups; ++i)
-				X[i][eliminated[idx]] = X[i][it->second];
-			
-			it->second = eliminated[idx];
-			//elog(INFO, "if out");
-		}
-		//elog(INFO, "for out");
-	}
-end_loop:
+				X[i][eliminated[m_count]] = X[i][aux];
 
-	for (int i = 0; i < prods_map->size(); ++i)
+			m_count++;
+			aux++;
+		}
+
+	// Nesse loop não existem mais removiso entre os últimos
+	while (aux < n_prods)
+	{
+		Xp[eliminated[m_count]] = Xp[aux];
+
+		if (index & PCI)
+		{
+			SPI_pfree(prods[eliminated[m_count]]);
+			prods[eliminated[m_count]] = prods[aux];
+		};
+
+		for (int i = 0; i < n_groups; ++i)
+			X[i][eliminated[m_count]] = X[i][aux];
+
+		m_count++;
+		aux++;
+	}
+
+	//Debug
+	for (int i = 0; i < count; ++i)
 		if (Xp[i] == 0)
 			elog(INFO, "Erro na remoção de produtos não comercializados.");
 
 	//elog(INFO, "NULLs: %d", count);
 	pfree(eliminated);
-	pfree(moved);
+
+	return n_prods - count;
 }
 
 void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int n_total_prods,
@@ -513,33 +567,28 @@ void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
 	elog(INFO, "packed");
 }
 
-void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year,
-	int f_year, int hs_digits, perm_mem* pm, index_t index,
+void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	FuncCallContext* funcctx, MemoryContext original_context)
 {
-	//# Mc e Mp podem virar int* 
-	double *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
-	int n_total_prods = prods_map->size();
+	//# Mc e Mp podem virar int*
+	double **X, *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
+	int n_total_prods, n_prods, n_groups = ARR_DIMS(PG_GETARG_ARRAYTYPE_P(0))[0];
 
-	double (*X)[n_total_prods] = (decltype(X)) palloc(sizeof(*X) * n_groups);
-	Xc = (double*) palloc(sizeof(*Xc) * n_groups);
-	Xp = (double*) palloc(sizeof(*Xp) * n_total_prods);
-
-	calc_X(countrs_map, n_groups, prods_map, s_year, f_year, hs_digits, (double**) X, Xp, Xc);
+	n_total_prods = calc_X(PG_GETARG_ARRAYTYPE_P(0), PG_GETARG_INT32(1), PG_GETARG_INT32(2),
+		PG_GETARG_INT32(3) << 1, &X, &Xp, &Xc, pm, index);
 	tick("calc_X");
-	filter_products(Xp, (double**) X, n_groups, prods_map);
+	n_prods = filter_products(Xp, X, pm->prods, n_groups, n_total_prods, index);
 	tick("filter_products");
 
 	for (int i = 0; i < n_groups; ++i)
 		X_total += Xc[i];
 
-	char (*M)[prods_map->size()] = (decltype(M)) palloc(sizeof(*M) * n_groups);
+	char (*M)[n_prods] = (decltype(M)) palloc(sizeof(*M) * n_groups);
 	Mc = (double*) palloc(sizeof(*Mc) * n_groups);
-	Mp = (double*) palloc(sizeof(*Mp) * prods_map->size());
+	Mp = (double*) palloc(sizeof(*Mp) * n_prods);
 	//# Conferir valores de Xc e Xp
 
-	calc_M((double**) X, Xp, Xc, n_groups, prods_map->size(), n_total_prods,
-		X_total, (char**) M, Mc, Mp);
+	calc_M(X, Xp, Xc, n_groups, n_prods, n_total_prods, X_total, (char**) M, Mc, Mp);
 	pfree(X);
 	pfree(Xc);
 	pfree(Xp);
@@ -550,7 +599,7 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 
 	double (*W)[n_groups] = (decltype(W)) palloc(sizeof(*W) * n_groups);
 
-	calc_W((char**) M, Mc, Mp, n_groups, prods_map->size(), (double**) W);
+	calc_W((char**) M, Mc, Mp, n_groups, n_prods, (double**) W);
 	pfree(Mc);
 	if (index == ECI)
 	{
@@ -572,9 +621,9 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 		return;
 	}
 
-	Kp = (double*) SPI_palloc(sizeof(*Kp) * prods_map->size());
+	Kp = (double*) SPI_palloc(sizeof(*Kp) * n_prods);
 
-	calc_Kp(Kc, n_groups, prods_map->size(), (char**) M, Mp, Kp);
+	calc_Kp(Kc, n_groups, n_prods, (char**) M, Mp, Kp);
 	tick("calc_Kp");
 	pfree(M);
 	pfree(Mp);
@@ -583,18 +632,18 @@ void calc_indexes(l_map* countrs_map, int n_groups, l_map* prods_map, int s_year
 	{
 		SPI_pfree(Kc);
 
-		z_transform(Kp, prods_map->size());
+		z_transform(Kp, n_prods);
 		pm->indexes = Kp;
 
-		pm->n_prods = prods_map->size();
+		pm->n_prods = n_prods;
 		return;
 	}
 
 	//ECI_PCI
 	z_transform(Kc, n_groups);
-	z_transform(Kp, prods_map->size());
+	z_transform(Kp, n_prods);
 	//MemoryContext old_contex = MemoryContextSwitchTo(original_context);
-	pack_indexes(Kc, n_groups, Kp, prods_map->size(), pm, funcctx->tuple_desc);
+	pack_indexes(Kc, n_groups, Kp, n_prods, pm, funcctx->tuple_desc);
 	//MemoryContextSwitchTo(old_contex);
 }
 
@@ -615,13 +664,11 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 			errmsg("hs_digit_pairs must be 1, 2 or 3")
 		));
 
-	hs_digits <<= 1;
-
-	//Cria contexto de chamada
+	// Cria contexto de chamada
 	funcctx = SRF_FIRSTCALL_INIT();
 	original_context = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-	//Identifica tipo de retorno
+	// Identifica tipo de retorno
 	if (get_call_result_type(fcinfo, NULL, &td) != TYPEFUNC_COMPOSITE)
 		ereport(ERROR,
 		(
@@ -630,33 +677,22 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 		));
 	funcctx->tuple_desc = BlessTupleDesc(td);
 
-	//Cria memória do contexto
+	// Cria memória multichamada
 	pm = (perm_mem*) palloc(sizeof(perm_mem));
 	funcctx->user_fctx = pm;
 
 	if (index & ECI)
 		pm->ar_it = array_create_iterator(groups, 0, NULL);
 
-	//Calcula índices
+	/*		Calcula índices      */
 	SPI_connect();
 
-	l_map* countrs_map = new l_map(241 * 1.3, l_str(3), l_str(3));
-	l_map* prods_map = new l_map(0, l_str(hs_digits), l_str(hs_digits));
 	initick();
-	create_common_countrs_map(countrs_map, groups);
-	tick("countrs_map");
-	create_prods_map(prods_map, hs_digits, pm, index);
-	tick("prods_map");
-	//elog(INFO, "main, created maps: %d %d", countrs_map->size(), prods_map->size());
-
-	calc_indexes(countrs_map, *ARR_DIMS(groups), prods_map, PG_GETARG_INT32(1),
-		PG_GETARG_INT32(2), hs_digits, pm, index);
+	calc_indexes(fcinfo, pm, index, funcctx, original_context);
 	tick("calc_indexes");
 
-	delete prods_map, countrs_map;
 	SPI_finish();
 	MemoryContextSwitchTo(original_context);
-	//elog(INFO, "final first");
 }
 
 Datum return_table(FunctionCallInfo fcinfo, index_t index)
@@ -743,6 +779,7 @@ Datum common_eci_pci(PG_FUNCTION_ARGS)
 void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
 {
 	int len = VARSIZE_ANY_EXHDR(prod);
+	mystring* query;
 
 	if (len < 0 || len > 6 || len & 1)
 		ereport(ERROR,
@@ -760,10 +797,11 @@ void query_series(text* c1, text* c2, int start_yi, int end_yi, VarChar* prod)
 #define Q5 " AND left(product, 0) = '"
 #define Q6 " GROUP BY exporter, product, year ORDER BY year, product\0"
 
-	len += sizeof(Q0) + sizeof(Q1) + sizeof(Q2) + sizeof(Q3) + sizeof(Q4) + sizeof(Q5) + sizeof(Q6) + 15;
-	//15 = + 2*10(ints) + 1(\') - 6 (sizeof \0s)
+	len += sizeof(Q0) + sizeof(Q1) + sizeof(Q2) + sizeof(Q3) + sizeof(Q4) +
+		sizeof(Q5) + sizeof(Q6) + 2 * MAXINTSIZE - 5;
+	//5 = 1(\') - 6 (sizeof \0s)
 
-	mystring* PMYSTRING_INIT(query, 4 + len);
+	PMYSTRING_INIT(query, VARHDRSZ + len);
 	query->litcat(Q0);
 	query->concat(VARDATA_ANY(c1), VARSIZE_ANY_EXHDR(c1));
 	query->litcat(Q1);

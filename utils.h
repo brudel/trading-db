@@ -2,6 +2,7 @@
 
 
 #define MAX(X, Y) ((X) < (Y) ? (X) : (Y))
+#define MAXINTSIZE 11
 // For hardcoded strings
 #define litcat(lit) concat(lit, sizeof(lit) - 1)
 
@@ -61,35 +62,6 @@ struct mystring
 		return data + len;
 	}
 };
-
-//https://www.sanfoundry.com/c-program-implement-interpolation-search-array-integers/
-int interpolation_search(int* vec, int top, int value)
-{
-	//elog(INFO, "\tsearch in %d %d", top, value);
-	int bottom = 0, mid;
-	--top;
-
-	//O condicional precisa ser disjunto em bottom == top
-	//	para ser falso e evitar divisão por zero.
-	while (vec[bottom] < value && value <= vec[top])
-	{
-		mid = bottom + (top - bottom) * (value - vec[bottom]) / (vec[top] - vec[bottom]);
-		//elog(INFO, "\tsearch loop %d %d %d %d %d", bottom, mid, top, vec[bottom], vec[top]);
-
-		if (value == vec[mid]){
-			//elog(INFO, "\tsearch find");
-			return mid;}
-
-		if (value < vec[mid])
-			top = mid - 1;
-
-		else
-			bottom = mid + 1;
-	}
-	//elog(INFO, "\tsearch out not");
-
-	return value == vec[bottom] ? bottom : -1;
-}
 
 struct l_str
 {
