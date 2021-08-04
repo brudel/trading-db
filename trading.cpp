@@ -15,6 +15,8 @@ PG_MODULE_MAGIC;
 #include "utils.h"
 
 //# Retirar indicadores de erro antes da entrega final
+//# Consulta ao bd significativamente mal otimizada para continent, pois
+// poderia agrupar e não o faz.
 
 //#define PROFILE
 
@@ -42,10 +44,12 @@ typedef struct perm_mem {
 	Datum vecs_tuple; // eci_pci
 } perm_mem;
 
-#define SBI_getString(tuple, tupdesc, col, is_null) (char*) \
-	VARDATA_ANY( DatumGetTextP( \
+#define SBI_getText(tuple, tupdesc, col, is_null) DatumGetTextP( \
 		SPI_getbinval(tuple, tupdesc, col, is_null) \
-	))
+	)
+
+#define SBI_getString(tuple, tupdesc, col, is_null) (char*) \
+	VARDATA_ANY(SBI_getText(tuple, tupdesc, col, is_null))
 
 #define SBI_getDouble(tuple, tupdesc, col, is_null) DatumGetFloat8( \
 		SPI_getbinval(tuple, tupdesc, col, is_null) \
@@ -58,7 +62,7 @@ typedef struct perm_mem {
 #define PMYSTRING_INIT(mstr, n) mstr = (mystring*) palloc(n); \
 mstr->len = 0;
 
-typedef std::unordered_map<char*, int, l_str, l_str> l_map;
+typedef std::unordered_map<text*, int, t_aux, t_aux> t_map;
 
 enum index_t {
 	ECI = 1,
@@ -66,7 +70,7 @@ enum index_t {
 	ECI_PCI
 };
 
-void create_countrs_map(l_map *countrs_map, ArrayType* groups)
+void create_common_countrs_map(t_map *countrs_map, ArrayType* groups)
 {
 	int count = 0;
 	Datum daux;
@@ -85,16 +89,30 @@ void create_countrs_map(l_map *countrs_map, ArrayType* groups)
 		while (array_iterate(itm, &daux, &is_null))
 		{
 			taux = DatumGetTextP(daux);
-			countrs_map->insert({{VARDATA_ANY(taux), count}});
+			countrs_map->insert({{taux, count}});
 		}
 
 		++count;
 	}
 }
 
-int create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
+void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups)
+{
+	int count = 0;
+	Datum daux;
+	bool is_null;
+
+	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
+	while (array_iterate(itv, &daux, &is_null))
+		countrs_map->insert({{DatumGetTextP(daux), count++}});
+}
+
+int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
 {
 	int n;
+	TupleDesc td;
+	HeapTuple tuple;
+	text* prod;
 	bool is_null;
 
 #define Q "SELECT DISTINCT left(hs_code, 0) FROM product"
@@ -107,35 +125,35 @@ int create_prods_map(l_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 	int status = SPI_execute(query, true, 0);
 	pfree(query);
 
-	if (status > 0 && SPI_tuptable != NULL)
+	if (status <= 0 || SPI_tuptable == NULL)
+		elog(ERROR, "Alguma coisa");
+
+	td = SPI_tuptable->tupdesc;
+	prods_map->reserve(SPI_tuptable->numvals * 1.3);
+
+	if (index & PCI)
+		pm->prods = (text**) SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
+
+	//elog(INFO, "create prods: %d", SPI_tuptable->numvals);
+	n = SPI_tuptable->numvals;
+	for (int i = 0; i < n; i++)
 	{
-		TupleDesc tupdesc = SPI_tuptable->tupdesc;
-		prods_map->reserve(SPI_tuptable->numvals * 1.3);
+		tuple = SPI_tuptable->vals[i];
 
 		if (index & PCI)
-			pm->prods = (text**) SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
-
-		//elog(INFO, "create prods: %d", SPI_tuptable->numvals);
-		n = SPI_tuptable->numvals;
-		for (int i = 0; i < n; i++)
 		{
-			HeapTuple tuple = SPI_tuptable->vals[i];
-			char* prod = SBI_getString(tuple, tupdesc, 1, &is_null);
-
-			//elog(INFO, "i = %d", i);
-			prods_map->insert({{prod, i}});
-			//elog(INFO, "%d", i);
-
-			if (index & PCI)
-			{//# Usar para o mapa também
-				text* prod_t = (text*) SPI_palloc(hs_digits + VARHDRSZ);
-				SET_VARSIZE(prod_t, hs_digits + VARHDRSZ);
-				memcpy(VARDATA_ANY(prod_t), prod, hs_digits);
-
-				pm->prods[i] = prod_t;
-				//prods_map->insert({VARDATA(prod_t), i});
-			}
+			pm->prods[i] = prod;
+			prod = (text*) SPI_palloc(hs_digits + VARHDRSZ);
 		}
+		else
+			prod = (text*) palloc(hs_digits + VARHDRSZ); //# Usar para o mapa também
+
+		SET_VARSIZE(prod, hs_digits + VARHDRSZ);
+		memcpy(VARDATA_ANY(prod), SBI_getString(tuple, td, 1, &is_null), hs_digits);
+
+		//elog(INFO, "i = %d", i);
+		prods_map->insert({{prod, i}});
+
 	}
 	SPI_freetuptable(SPI_tuptable);
 
@@ -231,7 +249,7 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 	status = SPI_execute(query->data, true, 0);
 	pfree(query);
 
-	if (status <= 0 && SPI_tuptable == NULL)
+	if (status <= 0 || SPI_tuptable == NULL)
 		elog(ERROR, "falha ao consultar o bd");
 }
 
@@ -241,11 +259,21 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	double *Xc, *Xp;
 	int c, p, n_prods, n_groups = ARR_DIMS(groups)[0];
 	bool is_null, c_groups = groups->elemtype == TEXTOID;
+	t_map* countrs_map;
+	t_map* prods_map = new t_map(0, t_aux(hs_digits), t_aux(hs_digits));
 
-	l_map* countrs_map = new l_map(241 * 1.3, l_str(3), l_str(3));
-	l_map* prods_map = new l_map(0, l_str(hs_digits), l_str(hs_digits));
-	create_countrs_map(countrs_map, groups);
+	if (c_groups)
+	{
+		countrs_map = new t_map(241 * 1.3);
+		create_groups_countrs_map(countrs_map, groups);
+	}
+	else
+	{
+		countrs_map = new t_map(241 * 1.3, t_aux(3), t_aux(3));
+		create_common_countrs_map(countrs_map, groups);
+	}
 	tick("countrs_map");
+
 	n_prods = create_prods_map(prods_map, hs_digits, pm, index);
 	tick("prods_map");
 
@@ -297,14 +325,14 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 		//elog(INFO, "a");
 		HeapTuple tuple = SPI_tuptable->vals[i];
 
-		auto it = countrs_map->find(SBI_getString(tuple, tupdesc, 1, &is_null));
+		auto it = countrs_map->find(SBI_getText(tuple, tupdesc, 1, &is_null));
 		//elog(INFO, "truple[%d]='%3s'", i, SBI_getString(tuple, tupdesc, 1, &is_null));
 		if (it == countrs_map->end())
 			continue;
 
 		c = it->second;
-		p = (*prods_map)[SBI_getString(tuple, tupdesc, 2, &is_null)];
-		//elog(INFO, "%d %d", i, p);
+		//elog(INFO, "%d %d %.2s", i, c, SBI_getString(tuple, tupdesc, 2, &is_null));
+		p = (*prods_map)[SBI_getText(tuple, tupdesc, 2, &is_null)];
 		//elog(INFO, "b");
 
 		double value = SBI_getDouble(tuple, tupdesc, 3, &is_null);
@@ -316,6 +344,9 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 		//elog(INFO, "c");
 	}
 	SPI_freetuptable(SPI_tuptable);
+
+	// for (int i = 0; i < n_groups; ++i)
+	// 	elog(INFO, "Xc: %lf", Xc[i]);
 
 	return n_prods;
 }
@@ -512,6 +543,25 @@ void calc_Kp(double* Kc, int n_groups, int n_prods, char** _M, double* Mp, doubl
 	data = att_align_nominal(data, MAXIMUM_ALIGNOF);
 }*/
 
+Datum getGroup(ArrayIterator it)
+{
+	HeapTupleHeader hth;
+	Datum daux;
+	bool isNullAux;
+
+	if (it->arr->elemtype == TEXTOID)
+		array_iterate(it, &daux, &isNullAux);
+
+	else
+	{
+		array_iterate(it, &daux, &isNullAux);
+		hth = DatumGetHeapTupleHeader(daux);
+		daux = GetAttributeByNum(hth, 1, &isNullAux);
+	}
+	
+	return daux;
+}
+
 void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
 		perm_mem* pm, TupleDesc call_td)
 {
@@ -519,10 +569,9 @@ void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
 	short elmlen;
 	bool elmbyval;
 	char elmalign;
-	Datum data[2], daux, *elems;
+	Datum data[2], *elems;
 	int len;
-	HeapTupleHeader hth;
-	bool isnull[] = {false, false}, isNullAux;
+	bool isnull[] = {false, false};
 	ArrayType* arr;
 	TupleDesc td;
 
@@ -532,10 +581,7 @@ void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
 
 	for (int i = 0; i < n_groups; ++i)
 	{
-		array_iterate(pm->ar_it, &daux, &isNullAux);
-		hth = DatumGetHeapTupleHeader(daux);
-
-		data[0] = GetAttributeByNum(hth, 1, &isNullAux);
+		data[0] = getGroup(pm->ar_it);
 		data[1] = Float8GetDatumFast(Kc[i]);
 		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull));
 	}
@@ -718,9 +764,7 @@ Datum return_table(FunctionCallInfo fcinfo, index_t index)
 		}
 
 		//Cria resultados da chamada
-		array_iterate(pm->ar_it, &daux, &isNullAux);
-		hth = DatumGetHeapTupleHeader(daux);
-		dt[0] = GetAttributeByNum(hth, 1, &isNullAux);
+		dt[0] = getGroup(pm->ar_it);
 	}
 	else
 	{
@@ -850,7 +894,7 @@ BG_FUNCTION_INFO_V1(euclidean_distance);
 Datum euclidean_distance(PG_FUNCTION_ARGS)
 {
 	bool is_null;
-	l_str p_compare(6);
+	t_aux p_compare(6);
 
 	SPI_connect();
 
@@ -877,7 +921,7 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 	{
 		current = SPI_tuptable->vals[i];
 
-		if (!p_compare(SBI_getString(current, tupdesc, 2, &is_null), SBI_getString(last, tupdesc, 2, &is_null))
+		if (!p_compare(SBI_getText(current, tupdesc, 2, &is_null), SBI_getText(last, tupdesc, 2, &is_null))
 			||
 			SBI_getInt(current, tupdesc, 3, &is_null) != SBI_getInt(last, tupdesc, 3, &is_null))
 		{
