@@ -149,11 +149,11 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 
 		if (index & PCI)
 		{
-			pm->prods[i] = prod;
 			prod = (text*) SPI_palloc(hs_digits + VARHDRSZ);
+			pm->prods[i] = prod;
 		}
 		else
-			prod = (text*) palloc(hs_digits + VARHDRSZ); //# Usar para o mapa também
+			prod = (text*) palloc(hs_digits + VARHDRSZ);
 
 		SET_VARSIZE(prod, hs_digits + VARHDRSZ);
 		memcpy(VARDATA_ANY(prod), SBI_getString(tuple, td, 1, &is_null), hs_digits);
@@ -163,7 +163,6 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 
 	}
 	SPI_freetuptable(SPI_tuptable);
-
 
 	//for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
 	//	elog(INFO, "prods[%.6s] = %d", it->first, it->second);
@@ -345,7 +344,7 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 		double value = SBI_getDouble(tuple, tupdesc, 3, &is_null);
 
 		X[c][p] += value;
-		//# Mais operações do que calcular em x[c][p] pronto, mas não precisa percorrer dnv
+		//# Mais operações do que calcular em x[c][p] pronto para grupos, mas não precisa percorrer dnv
 		Xc[c] += value;
 		Xp[p] += value;
 		//elog(INFO, "c");
@@ -360,7 +359,6 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	return n_prods;
 }
 
-//# Não vai precisar mudar o mapa
 //# Se usar valor mínimo > 0 vai precisar ajustar Xc pra tirar os produtos excluídos
 int filter_products(double* Xp, double** _X, text** prods, int n_groups, int n_prods, index_t index)
 {
@@ -555,60 +553,53 @@ Datum getGroup(ArrayIterator it)
 }
 
 void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
-		perm_mem* pm, TupleDesc call_td)
+		perm_mem* pm, TupleDesc call_td, MemoryContext original_context)
 {
-	elog(INFO, "pack");
 	short elmlen;
 	bool elmbyval;
 	char elmalign;
 	Datum data[2], *elems;
-	int len;
 	bool isnull[] = {false, false};
 	ArrayType* arr;
 	TupleDesc td;
 
 	elems = (Datum*) palloc(sizeof(*elems) * MAX(n_groups, n_prods));
 	td = RelationNameGetTupleDesc("eciout");
-	elog(INFO, "%d", td->tdtypeid);
 
 	for (int i = 0; i < n_groups; ++i)
 	{
 		data[0] = getGroup(pm->ar_it);
 		data[1] = Float8GetDatumFast(Kc[i]);
-		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull));
+		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull)->t_data);
 	}
 
 	get_typlenbyvalalign(td->tdtypeid, &elmlen, &elmbyval, &elmalign);
 	arr = construct_array(elems, n_groups, td->tdtypeid, elmlen, elmbyval, elmalign);
-	//arr = construct_empty_array(td->tdtypeid);
-	elog(INFO, "arr 0");
 
 	td = RelationNameGetTupleDesc("pciout");
-	elog(INFO, "%d", td->tdtypeid);
 
 	for (int i = 0; i < n_prods; ++i)
 	{
 		data[0] = PointerGetDatum(pm->prods[i]);
 		data[1] = Float8GetDatumFast(Kp[i]);
-		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull));
+		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull)->t_data);
 	}
 
 	get_typlenbyvalalign(td->tdtypeid, &elmlen, &elmbyval, &elmalign);
 	data[1] = PointerGetDatum(construct_array(elems, n_prods, td->tdtypeid,
 		elmlen, elmbyval, elmalign));
-	elog(INFO, "arr 1");
 
 	data[0] = PointerGetDatum(arr);
-	//data[1] = PointerGetDatum(construct_empty_array(td->tdtypeid));
-	elog(INFO, "%d", call_td->tdtypeid);
+
+	MemoryContext old_contex = MemoryContextSwitchTo(original_context);
 	pm->vecs_tuple = HeapTupleGetDatum(heap_form_tuple(call_td, data, isnull));
-	elog(INFO, "packed");
+	MemoryContextSwitchTo(old_contex);
 }
 
 void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	FuncCallContext* funcctx, MemoryContext original_context)
 {
-	//# Mc e Mp podem virar int*
+	//# Mc e Mp podem virar int*, se fossem convertidos para double no uso
 	double **X, *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
 	int n_total_prods, n_prods, n_groups = ARR_DIM(PG_GETARG_ARRAYTYPE_P(0));
 
@@ -624,7 +615,6 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	char (*M)[n_prods] = (decltype(M)) palloc(sizeof(*M) * n_groups);
 	Mc = (double*) palloc(sizeof(*Mc) * n_groups);
 	Mp = (double*) palloc(sizeof(*Mp) * n_prods);
-	//# Conferir valores de Xc e Xp
 
 	calc_M(X, Xp, Xc, n_groups, n_prods, n_total_prods, X_total, (char**) M, Mc, Mp);
 	pfree(X);
@@ -680,9 +670,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	//ECI_PCI
 	z_transform(Kc, n_groups);
 	z_transform(Kp, n_prods);
-	//MemoryContext old_contex = MemoryContextSwitchTo(original_context);
-	pack_indexes(Kc, n_groups, Kp, n_prods, pm, funcctx->tuple_desc);
-	//MemoryContextSwitchTo(old_contex);
+	pack_indexes(Kc, n_groups, Kp, n_prods, pm, funcctx->tuple_desc, original_context);
 }
 
 void common_index_init(FunctionCallInfo fcinfo, index_t index)
@@ -725,8 +713,8 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	/*		Calcula índices      */
 	SPI_connect();
 
-	initick();
-	calc_indexes(fcinfo, pm, index, funcctx, original_context);
+	initick(); //funcctx->multi_call_memory_ctx
+	calc_indexes(fcinfo, pm, index, funcctx, funcctx->multi_call_memory_ctx);
 	tick("calc_indexes");
 
 	SPI_finish();
@@ -808,7 +796,6 @@ Datum common_eci_pci(PG_FUNCTION_ARGS)
 
 	perm_mem* pm = (perm_mem*) SRF_PERCALL_SETUP()->user_fctx;
 
-	elog(INFO, "Vai sai");
 	PG_RETURN_DATUM(pm->vecs_tuple);
 }
 

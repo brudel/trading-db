@@ -5,7 +5,7 @@ extern "C" {
 #include <cstring>
 
 
-#define MAX(X, Y) ((X) < (Y) ? (X) : (Y))
+#define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 #define MAXINTSIZE 11
 // For hardcoded strings
 #define litcat(lit) concat(lit, sizeof(lit) - 1)

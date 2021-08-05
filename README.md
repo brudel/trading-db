@@ -75,18 +75,27 @@ Conjunto de funções para cálculo de índices de complexidade econômica (ECI)
 
 ### Funções:
 
-* `common_eci`
-* `common_pci`
-
-<br/>
-
 * `countries_eci`
 * `countries_pci`
+* `countries_eci_pci`
 
 <br/>
 
 * `continents_eci`
 * `continents_pci`
+* `continents_eci_pci`
+
+<br/>
+
+* `groups_eci`
+* `groups_pci`
+* `groups_eci_pci`
+
+<br/>
+
+* `common_eci`
+* `common_pci`
+* `common_eci_pci`
 
 ### Argumentos
 
@@ -101,7 +110,7 @@ start_year | integer | Ano a ser calculado o índice, ou primeiro ano do interva
 
 Nome | Tipo | Valor padrão | Descrição
 ---- | ---- | ------------ | ---------
-end_year | integer | 0 | Se definido, final do intervalo a ser calculado o índice.
+end_year | integer | 0 | Se definido, último ano do intervalo a ser calculado o índice.
 hs_digit_pairs | integer | 3 | Define quantos pares de dígitos do HS serão considerados. Deve ser 1, 2 ou 3.
 
 ### Prefixos
@@ -110,7 +119,9 @@ hs_digit_pairs | integer | 3 | Define quantos pares de dígitos do HS serão con
 
 `continents`: O argumento `groups` contém uma lista de códigos de continentes a serem considerados para o cálculo dos índices, sendo os valores transacionais dos países pertencentes a cada continente agregados.
 
-`common`: Funções com esse prefixo excepcionalmente tem o argumento `groups` com o tipo `cgroup[]`. Sendo esse tipo a representação de um grupo nomeado com a lista dos respectivos países membros, definido como:
+`groups`: O argumento `groups` contém uma lista de nomes de grupos de países pertencentes a `country_group` a serem considerados para o cálculo dos índices. O cálculo considera a entrada e saída de países de um grupo durante o intervalo de tempo e um mesmo país pode estar em múltiplos grupos.
+
+`common`: Funções com esse prefixo excepcionalmente tem o argumento `groups` com o tipo `cgroup[]`. Sendo esse tipo a representação arbitrária de um grupo nomeado com a lista dos respectivos países membros. Um país não pode estar em mais de um grupo e os membros de cada grupo são estáticos para o intervalo de cálculo. `cgroup` é definido como:
 
 `cgroup = (name text, members text[])`
 
@@ -119,6 +130,8 @@ hs_digit_pairs | integer | 3 | Define quantos pares de dígitos do HS serão con
 `eci`: Produz um conjunto de tuplas no formato `(name text, eci double precision)`, sendo `name` o código do país ou continente ou o nome do grupo.
 
 `pci`: Produz um conjunto de tuplas no formato `(product text, pci double precision)`.
+
+`eci_pci`: Produz uma tupla no formato `((name text, eci double precision)[], (product text, pci double precision))`, contendo dois vetores, sendo eles os respectivos resultados do cálculo de ECI e PCI. As funções demoram virtualmente o mesmo tempo independentemente do sufixo, portanto funções com esse sufixo são indicadas para otimizar situações em que ambas da medidas são desejadas.
 
 ### Exemplos
 
@@ -160,15 +173,15 @@ Calcula a distancia euclidiana entre duas séries de transações com diferentes
 
 Nome | Tipo | Descrição
 ---- | ---- | ---------
-country_1 | text | País 1.
-country_2 | text | País 2.
+country_1 | text ou text[] | País 1.
+country_2 | text ou text[] | País 2.
 
 #### Opcionais
 
 Nome | Tipo | Valor padrão | Descrição
 ---- | ---- | ------------ | ---------
-start_year | integer | 0 | Define limite inferior para o intervalo.
-end_year | integer | 0 | Define limite superior para o intervalo.
+start_year | integer | 0 | Define limite inferior para o intervalo (limite incluso).
+end_year | integer | 0 | Define limite superior para o intervalo (limite incluso).
 hs_code | varchar(6) | '' | Produto ou agregação seguindo o HS.
 
 ### Exemplos
@@ -183,7 +196,7 @@ Distancia euclidiana entre as séries de dois países até 1980:
 SELECT euclidean_distance('chn', 'eua', end_year => 1980);
 ~~~
 
-Distancia euclidiana entre as séries de dois países entre 1980 e 2000, para produtos que se enquadram na categoria café, chá, mate e pimentas:
+Distancia euclidiana entre as séries de dois países entre 1980 e 1999, para produtos que se enquadram na categoria café, chá, mate e pimentas:
 ~~~ SQL
-SELECT euclidean_distance('chn', 'eua', 1980, 2000, '09');
+SELECT euclidean_distance('chn', 'eua', 1980, 1999, '09');
 ~~~
