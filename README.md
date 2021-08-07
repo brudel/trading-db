@@ -191,9 +191,9 @@ Distancia euclidiana entre as séries de dois países:
 SELECT euclidean_distance('chn', 'eua');
 ~~~
 
-Distancia euclidiana entre as séries de dois países até 1980:
+Distancia euclidiana entre as séries da um país e outros dois países do começo dos tempos até 1980:
 ~~~ SQL
-SELECT euclidean_distance('chn', 'eua', end_year => 1980);
+SELECT euclidean_distance('chn', ARRAY['bra', 'chl'], end_year => 1980);
 ~~~
 
 Distancia euclidiana entre as séries de dois países entre 1980 e 1999, para produtos que se enquadram na categoria café, chá, mate e pimentas:

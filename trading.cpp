@@ -17,10 +17,14 @@ PG_MODULE_MAGIC;
 //# Retirar indicadores de erro antes da entrega final
 //# Consulta ao bd significativamente mal otimizada para continent, pois
 // poderia agrupar e não o faz.
+//# Decidir o que fazer com arrays com dimencionalidade > 1.
+//# Translate comments and readme
+//# Filtrar países.
 
 //#define PROFILE
 #define COUNTRY_SIZE 3
 #define PRODUCT_SIZE 6
+#define REAL_VALUE "COALESCE((exp_val + imp_val) / 2, exp_val, imp_val, 0)"
 
 #ifdef PROFILE
 extern "C" {
@@ -59,6 +63,9 @@ mstr->len = 0;
 
 #define ARR_DIM(v) ARR_DIMS(v)[0]
 
+#define HeapTupleHeaderHasNulls(hth) \
+	(((hth)->t_infomask & HEAP_HASNULL) != 0)
+
 
 typedef struct perm_mem {
 	ArrayIterator ar_it; // eci e eci_pci
@@ -86,17 +93,31 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups)
 	bool is_null;
 	text* taux;
 
+	//Retirar grupos com 0 elementos
 	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
 	while (array_iterate(itv, &daux, &is_null))
 	{
 		hth = DatumGetHeapTupleHeader(daux);
+
+		if (HeapTupleHeaderHasNulls(hth))
+			elog(ERROR, "groups has null elements");
+
 		members = DatumGetArrayTypeP(GetAttributeByNum(hth, 2, &is_null));
 
+		if (ARR_HASNULL(members))
+			elog(ERROR, "cgroup members has null elements");
+
 		ArrayIterator itm = array_create_iterator(members, 0, NULL);
+		if (!ARR_NDIM(members))
+			continue;
+
 		while (array_iterate(itm, &daux, &is_null))
 		{
 			taux = DatumGetTextP(daux);
-			countrs_map->insert({{taux, count}});
+			if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
+				elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
+
+			countrs_map->insert({taux, count});
 		}
 
 		++count;
@@ -108,10 +129,17 @@ void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups)
 	int count = 0;
 	Datum daux;
 	bool is_null;
+	text* taux;
 
 	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
 	while (array_iterate(itv, &daux, &is_null))
-		countrs_map->insert({{DatumGetTextP(daux), count++}});
+	{
+		taux = DatumGetTextP(daux);
+		if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
+			elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
+
+		countrs_map->insert({taux, count++});
+	}
 }
 
 int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
@@ -133,7 +161,7 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 	pfree(query);
 
 	if (status <= 0 || SPI_tuptable == NULL)
-		elog(ERROR, "Alguma coisa");
+		elog(ERROR, "can't successfully access needed data on database");
 
 	td = SPI_tuptable->tupdesc;
 	prods_map->reserve(SPI_tuptable->numvals * 1.3);
@@ -159,7 +187,7 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 		memcpy(VARDATA_ANY(prod), SBI_getString(tuple, td, 1, &is_null), hs_digits);
 
 		//elog(INFO, "i = %d", i);
-		prods_map->insert({{prod, i}});
+		prods_map->insert({prod, i});
 
 	}
 	SPI_freetuptable(SPI_tuptable);
@@ -183,8 +211,7 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 #define QC_G "c_group"
 
 #define QSELECT "SELECT "
-#define QSCOLUMNS ", left(product, 0),"\
-	" sum(COALESCE((exp_val + imp_val) / 2, exp_val, imp_val)) FROM transaction "
+#define QSCOLUMNS ", left(product, 0), sum(" REAL_VALUE ") FROM transaction "
 #define QJOIN "JOIN country_group_belonging ON " \
 	"(exporter = country AND year >= entry_year AND (exit_year IS NULL OR year < exit_year)) "
 // Possivelmente adicionar restrição c_name in na cláusula do join
@@ -209,7 +236,7 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 		query->litcat(QEXP);
 
 	query->litcat(QSCOLUMNS);
-	query->data[query->len - 78] |= hs_digits;
+	query->data[query->len - 81] |= hs_digits;
 
 	if (c_groups)
 		query->litcat(QJOIN);
@@ -256,7 +283,7 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 	pfree(query);
 
 	if (status <= 0 || SPI_tuptable == NULL)
-		elog(ERROR, "falha ao consultar o bd");
+		elog(ERROR, "can't successfully access needed data on database");
 }
 
 int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
@@ -683,12 +710,14 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	MemoryContext original_context;
 
 	//Validate args
+	if (ARR_HASNULL(groups))
+		elog(ERROR, "groups has null elements");
+
+	if (!ARR_NDIM(groups) || ARR_DIM(groups) < 2)
+		elog(ERROR, "groups must have at least 2 elements");
+
 	if (hs_digits > 3 || hs_digits < 1)
-		ereport(ERROR,
-		(
-			errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			errmsg("hs_digit_pairs must be 1, 2 or 3")
-		));
+		elog(ERROR, "hs_digit_pairs must be 1, 2 or 3");
 
 	// Cria contexto de chamada
 	funcctx = SRF_FIRSTCALL_INIT();
@@ -808,8 +837,8 @@ text* add_country(mystring* query, ArrayIterator itv)
 	array_iterate(itv, &daux, &is_null);
 	country = DatumGetTextP(daux);
 
-	if (is_null || VARSIZE_ANY_EXHDR(country) != COUNTRY_SIZE)
-		elog(ERROR, "Deu ruim");
+	if (VARSIZE_ANY_EXHDR(country) != COUNTRY_SIZE)
+		elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
 
 	query->concat(VARDATA_ANY(country), COUNTRY_SIZE);
 
@@ -824,11 +853,13 @@ t_map* add_contries(mystring* query, ArrayType* g1, ArrayType* g2)
 	bool is_null;
 	text* country;
 	ArrayIterator itv;
-	t_map* countrs_map = new t_map(ARR_DIM(g1) + ARR_DIM(g2) * 1.3, t_aux(COUNTRY_SIZE),
-		t_aux(COUNTRY_SIZE));
+	t_map* countrs_map;
 
-	if (!(ARR_DIM(g1) && ARR_DIM(g2)))
-		elog(ERROR, "Deu ruim");
+	if (ARR_HASNULL(g1) || ARR_HASNULL(g2) || !(ARR_NDIM(g1) && ARR_NDIM(g2)))
+		elog(ERROR, "country array is empty or has null elements");
+	
+	countrs_map = new t_map(ARR_DIM(g1) + ARR_DIM(g2) * 1.3, t_aux(COUNTRY_SIZE),
+		t_aux(COUNTRY_SIZE));
 
 #define QSEP "', '"
 
@@ -863,13 +894,9 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 	int status;
 
 	if (len < 0 || len > 6 || len & 1)
-		ereport(ERROR,
-		(
-			errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			errmsg("hs_code must be 0, 2, 4 or 6 digits")
-		));
+		elog(ERROR, "hs_code must have 0, 2, 4 or 6 digits");
 
-#define QSELECT "SELECT exporter, product, year, sum(COALESCE((exp_val + imp_val) / 2, exp_val, imp_val))"\
+#define QSELECT "SELECT exporter, product, year, sum(" REAL_VALUE ")"\
 	" FROM transaction WHERE exporter IN ('"
 #define QFCLOSE "')"
 #define QWSYEAR " AND year >= "
@@ -922,7 +949,7 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 	pfree(query);
 
 	if (status <= 0 || SPI_tuptable == NULL)
-		elog(ERROR, "É isso, deu ruim pessoal");
+		elog(ERROR, "can't successfully access needed data on database");
 
 	return countrs_map;
 }

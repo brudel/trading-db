@@ -7,8 +7,7 @@ extern "C" {
 
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 #define MAXINTSIZE 11
-// For hardcoded strings
-#define litcat(lit) concat(lit, sizeof(lit) - 1)
+#define litcat(lit) concat(lit, sizeof(lit) - 1) // For hardcoded strings
 
 
  /* Working state for array_iterate() */
