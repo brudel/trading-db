@@ -2,11 +2,11 @@ extern "C" {
 #include "postgres.h"
 #include "fmgr.h" //Module magic
 #include "funcapi.h" //Return row
-#include "utils/array.h" //Coisas de array
+#include "utils/array.h" //Array stuff
 #include "utils/lsyscache.h" //get_typlenbyvalalign
 #include "executor/spi.h" //SPI
-#include <lapacke.h> //AlgeLin
-#include <omp.h> //Paralelização
+#include <lapacke.h> // Eigenvectors and eigenvalues
+#include <omp.h> // Paralelização
 
 PG_MODULE_MAGIC;
 }
@@ -17,9 +17,8 @@ PG_MODULE_MAGIC;
 //# Retirar indicadores de erro antes da entrega final
 //# Consulta ao bd significativamente mal otimizada para continent, pois
 // poderia agrupar e não o faz.
-//# Decidir o que fazer com arrays com dimencionalidade > 1.
-//# Translate comments and readme
-//# Filtrar países.
+//# Documentate
+//# Retirar members vazios?
 
 //#define PROFILE
 #define COUNTRY_SIZE 3
@@ -43,12 +42,12 @@ clock_t init_t;
 PG_FUNCTION_INFO_V1(func); \
 }
 
-#define SBI_getText(tuple, tupdesc, col, is_null) DatumGetTextP( \
+#define SBI_getText(tuple, tupdesc, col, is_null) DatumGetTextPP( \
 		SPI_getbinval(tuple, tupdesc, col, is_null) \
 	)
 
-#define SBI_getString(tuple, tupdesc, col, is_null) (char*) \
-	VARDATA_ANY(SBI_getText(tuple, tupdesc, col, is_null))
+#define SBI_getString(tuple, tupdesc, col, is_null) ((char*) \
+	VARDATA_ANY(SBI_getText(tuple, tupdesc, col, is_null)))
 
 #define SBI_getDouble(tuple, tupdesc, col, is_null) DatumGetFloat8( \
 		SPI_getbinval(tuple, tupdesc, col, is_null) \
@@ -61,16 +60,16 @@ PG_FUNCTION_INFO_V1(func); \
 #define PMYSTRING_INIT(mstr, n) mstr = (mystring*) palloc(n + sizeof(mystring)); \
 mstr->len = 0;
 
-#define ARR_DIM(v) ARR_DIMS(v)[0]
+#define ARR_DIM(v) ArrayGetNItems(ARR_NDIM(v), ARR_DIMS(v))
 
 #define HeapTupleHeaderHasNulls(hth) \
 	(((hth)->t_infomask & HEAP_HASNULL) != 0)
 
 
 typedef struct perm_mem {
-	ArrayIterator ar_it; // eci e eci_pci
-	int n_prods; // pci e eci_pci
+	int n_indexes; // pci
 	text** prods; // pci e eci_pci
+	text** cntrs; // eci e eci_pci
 	double* indexes; // eci e pci
 	Datum vecs_tuple; // eci_pci
 } perm_mem;
@@ -84,7 +83,7 @@ enum index_t {
 };
 
 
-void create_common_countrs_map(t_map *countrs_map, ArrayType* groups)
+void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* pm, index_t index)
 {
 	int count = 0;
 	Datum daux;
@@ -92,6 +91,9 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups)
 	ArrayType* members;
 	bool is_null;
 	text* taux;
+
+	if (index & ECI)
+		pm->cntrs = (text**) SPI_palloc(sizeof(*pm->cntrs) * ARR_DIM(groups));
 
 	//Retirar grupos com 0 elementos
 	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
@@ -108,35 +110,47 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups)
 			elog(ERROR, "cgroup members has null elements");
 
 		ArrayIterator itm = array_create_iterator(members, 0, NULL);
-		if (!ARR_NDIM(members))
-			continue;
+
+		// if (!ARR_NDIM(members))
+		// 	continue;
+
+		if (index & ECI)
+			pm->cntrs[count] = DatumGetTextPP(GetAttributeByNum(hth, 1, &is_null));
 
 		while (array_iterate(itm, &daux, &is_null))
 		{
-			taux = DatumGetTextP(daux);
+			taux = DatumGetTextPP(daux);
 			if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
 				elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
 
-			countrs_map->insert({taux, count});
+			if (!countrs_map->insert({taux, count}).second)
+				elog(ERROR, "country belong to more than one group");
 		}
 
 		++count;
 	}
 }
 
-void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups)
+void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* pm, index_t index)
 {
 	int count = 0;
 	Datum daux;
 	bool is_null;
 	text* taux;
 
+	if (index & ECI)
+		pm->cntrs = (text**) SPI_palloc(sizeof(*pm->cntrs) * ARR_DIM(groups));
+
 	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
 	while (array_iterate(itv, &daux, &is_null))
 	{
-		taux = DatumGetTextP(daux);
+		taux = DatumGetTextPP(daux);
+
 		if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
 			elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
+
+		if (index & ECI)
+			pm->cntrs[count] = taux;
 
 		countrs_map->insert({taux, count++});
 	}
@@ -156,7 +170,6 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 	query[30] |= hs_digits;
 #undef Q
 
-	//elog(INFO, "query: %s", query);
 	int status = SPI_execute(query, true, 0);
 	pfree(query);
 
@@ -169,7 +182,6 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 	if (index & PCI)
 		pm->prods = (text**) SPI_palloc(sizeof(*pm->prods) * SPI_tuptable->numvals);
 
-	//elog(INFO, "create prods: %d", SPI_tuptable->numvals);
 	n = SPI_tuptable->numvals;
 	for (int i = 0; i < n; i++)
 	{
@@ -186,17 +198,10 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 		SET_VARSIZE(prod, hs_digits + VARHDRSZ);
 		memcpy(VARDATA_ANY(prod), SBI_getString(tuple, td, 1, &is_null), hs_digits);
 
-		//elog(INFO, "i = %d", i);
 		prods_map->insert({prod, i});
 
 	}
 	SPI_freetuptable(SPI_tuptable);
-
-	//for (auto it = prods_map->begin(); it != prods_map->end(); ++it)
-	//	elog(INFO, "prods[%.6s] = %d", it->first, it->second);
-
-	//for (int i = 0; i < prods_map->bucket_count(); ++i)
-	//	elog(INFO, "prods[%d] = %d", i, prods_map->bucket_size(i));
 
 	return n;
 }
@@ -214,18 +219,18 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 #define QSCOLUMNS ", left(product, 0), sum(" REAL_VALUE ") FROM transaction "
 #define QJOIN "JOIN country_group_belonging ON " \
 	"(exporter = country AND year >= entry_year AND (exit_year IS NULL OR year < exit_year)) "
-// Possivelmente adicionar restrição c_name in na cláusula do join
+//# Possivelmente adicionar restrição c_group in na cláusula do join
 #define QWHERE "WHERE year "
 #define QWEQ "= "
 #define QWGE ">= "
 #define QWFYEAR " AND year <= "
 #define QGROUP " GROUP BY "
-#define QGPROD ", left(product, 0)"
+#define QGPROD ", left(product, 0)\0"
 
 	PMYSTRING_INIT(query, sizeof(QSELECT) + 2 * MAX(sizeof(QEXP) - 1,
 		sizeof(QC_G) - 1) + sizeof(QSCOLUMNS) + sizeof(QJOIN) + sizeof(QWHERE)
 		+ MAX(sizeof(QWEQ) + MAXINTSIZE - 1, sizeof(QWGE) + sizeof(QWFYEAR) +
-		2 * MAXINTSIZE - 2) + sizeof(QGROUP) + sizeof(QGPROD) - 5);
+		2 * MAXINTSIZE - 2) + sizeof(QGROUP) + sizeof(QGPROD) - 6);
 	// -1 para cada string literal sem \0
 
 	query->litcat(QSELECT);
@@ -263,7 +268,7 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 	else
 		query->litcat(QEXP);
 
-	query->concat(QGPROD, sizeof(QGPROD));
+	query->litcat(QGPROD);
 	query->data[query->len - 3] |= hs_digits;
 
 #undef QEXP
@@ -278,7 +283,6 @@ void calc_X_common_query(int s_year, int f_year, int hs_digits, bool c_groups)
 #undef QGROUP
 #undef QGPROD
 
-	//elog(INFO, "query: %s", query->data);
 	status = SPI_execute(query->data, true, 0);
 	pfree(query);
 
@@ -298,12 +302,12 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	if (c_groups)
 	{
 		countrs_map = new t_map(241 * 1.3);
-		create_groups_countrs_map(countrs_map, groups);
+		create_groups_countrs_map(countrs_map, groups, pm, index);
 	}
 	else
 	{
 		countrs_map = new t_map(241 * 1.3, t_aux(COUNTRY_SIZE), t_aux(COUNTRY_SIZE));
-		create_common_countrs_map(countrs_map, groups);
+		create_common_countrs_map(countrs_map, groups, pm, index);
 	}
 	tick("countrs_map");
 
@@ -327,7 +331,6 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	//Inicia X e Xc
 	for (int i = 1; i < n_groups; ++i)
 	{
-		//elog(INFO, "Bucket[%d] > %d", i, countrs_map->bucket_size(i));
 		for (int j = 0; j < n_prods; ++j)
 			X[i][j] = 0;
 
@@ -335,38 +338,24 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	}
 	tick("calc_X set");
 
-	//elog(INFO, "Total %d", countrs_map->bucket_count());
-
 	calc_X_common_query(s_year, f_year, hs_digits, c_groups);
 	tick("SPI_execute");
 
 	TupleDesc tupdesc = SPI_tuptable->tupdesc;
-/*
-	auto coiso = countrs_map->hash_function();
-	elog(INFO, "%ld, %ld, %d", coiso("gbr"), coiso("gbr"), coiso("gbr", "gbr"));
 
-	auto itt = countrs_map->find("gbr");
-	if (itt == countrs_map->end())
-		elog(INFO, "erroww");
-	else
-		elog(INFO, "sec: %d", itt->second);*/
+	if (!SPI_tuptable->numvals)
+		elog(ERROR, "no transactions were found with these parameters");
 
-
-	//elog(INFO, "n: %d", SPI_tuptable->numvals);
 	for (int i = 0; i < SPI_tuptable->numvals; i++)
 	{
-		//elog(INFO, "a");
 		HeapTuple tuple = SPI_tuptable->vals[i];
 
 		auto it = countrs_map->find(SBI_getText(tuple, tupdesc, 1, &is_null));
-		//elog(INFO, "truple[%d]='%3s'", i, SBI_getString(tuple, tupdesc, 1, &is_null));
 		if (it == countrs_map->end())
 			continue;
 
 		c = it->second;
-		//elog(INFO, "%d %d %.2s", i, c, SBI_getString(tuple, tupdesc, 2, &is_null));
 		p = (*prods_map)[SBI_getText(tuple, tupdesc, 2, &is_null)];
-		//elog(INFO, "b");
 
 		double value = SBI_getDouble(tuple, tupdesc, 3, &is_null);
 
@@ -374,103 +363,93 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 		//# Mais operações do que calcular em x[c][p] pronto para grupos, mas não precisa percorrer dnv
 		Xc[c] += value;
 		Xp[p] += value;
-		//elog(INFO, "c");
 	}
 	SPI_freetuptable(SPI_tuptable);
 
 	delete countrs_map, prods_map;
 
-	// for (int i = 0; i < n_groups; ++i)
-	// 	elog(INFO, "Xc: %lf", Xc[i]);
-
 	return n_prods;
+}
+
+//# Se usar valor mínimo > 0 vai precisar ajustar Xp pra tirar os produtos excluídos
+int filter_groups(double* Xc, double** _X, text** cntrs, int n_groups, int n_prods, index_t index)
+{
+	double (*X)[n_prods] = (decltype(X)) _X;
+
+	while (--n_groups >= 0 && Xc[n_groups] == 0);
+
+	if (n_groups < 0)
+		elog(ERROR, "no transactions were found with non-zero value for these parameters");
+	n_groups++;
+
+	//Identifica
+	for (int i = 0; i < n_groups; ++i)
+		if (Xc[i] == 0)
+		{
+			while (Xc[--n_groups] == 0);
+			if (n_groups < i) // It's never equal
+			{
+				n_groups = i;
+				break;
+			}
+
+			Xc[i] = Xc[n_groups];
+
+			for (int j = 0; j < n_prods; ++j)
+				X[i][j] = X[n_groups][j];
+
+			if (index & ECI)
+				cntrs[i] = cntrs[n_groups];
+		}
+
+	if (n_groups < 2)
+		elog(ERROR, "less than two groups have transactions with non-zero value");
+
+	return n_groups;
 }
 
 //# Se usar valor mínimo > 0 vai precisar ajustar Xc pra tirar os produtos excluídos
 int filter_products(double* Xp, double** _X, text** prods, int n_groups, int n_prods, index_t index)
 {
-	//elog(INFO, "Entro");
-	int count = 0, idx, m_count, aux;
 	double (*X)[n_prods] = (decltype(X)) _X;
-	int* eliminated = (int*) palloc(sizeof(*eliminated)* n_prods), *moved;
 
-	//Identifica
 	for (int i = 0; i < n_prods; ++i)
 		if (Xp[i] == 0)
-			eliminated[count++] = i;
-
-	if (count == 0)
-		return n_prods;
-	//elog(INFO, "Identifico");
-
-		// Prepara variáveis para o loops
-	m_count = 0;
-	aux = n_prods - count; //Menor a ser movido
-
-	idx = count;
-	while (eliminated[--idx] >= aux); //Index do menor removido do intervalo dos movidos
-	
-	// Pula removidos entre os últimos
-	// idx itera sobre os removidos entre os últios
-	// aux itera sobre todos os últimos
-	// m_count itera sobre os removidos
-	for (; ++idx < count; ++aux)
-		while (aux != eliminated[idx])
 		{
-			Xp[eliminated[m_count]] = Xp[aux];
+			while (Xp[--n_prods] == 0);
+			if (n_prods < i) // It's never equal
+			{
+				n_prods = i;
+				break;
+			}
+
+			Xp[i] = Xp[n_prods];
+
+			for (int j = 0; j < n_groups; ++j)
+				X[j][i] = X[j][n_prods];
 
 			if (index & PCI)
 			{
-				SPI_pfree(prods[eliminated[m_count]]);
-				prods[eliminated[m_count]] = prods[aux];
+				SPI_pfree(prods[i]);
+				prods[i] = prods[n_prods];
 			}
-
-			for (int i = 0; i < n_groups; ++i)
-				X[i][eliminated[m_count]] = X[i][aux];
-
-			m_count++;
-			aux++;
 		}
 
-	// Nesse loop não existem mais removiso entre os últimos
-	while (aux < n_prods)
-	{
-		Xp[eliminated[m_count]] = Xp[aux];
+	if (n_prods < 2)
+		elog(ERROR, "less than two products have transactions with non-zero value");
 
-		if (index & PCI)
-		{
-			SPI_pfree(prods[eliminated[m_count]]);
-			prods[eliminated[m_count]] = prods[aux];
-		};
-
-		for (int i = 0; i < n_groups; ++i)
-			X[i][eliminated[m_count]] = X[i][aux];
-
-		m_count++;
-		aux++;
-	}
-
-	//Debug
-	for (int i = 0; i < count; ++i)
-		if (Xp[i] == 0)
-			elog(INFO, "Erro na remoção de produtos não comercializados.");
-
-	//elog(INFO, "NULLs: %d", count);
-	pfree(eliminated);
-
-	return n_prods - count;
+	return n_prods;
 }
 
 void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int n_total_prods,
-	double X_total, char**_M, double* Mc, double* Mp)
+	double X_total, bool**_M, double* Mc, double* Mp)
 {
 	double (*X)[n_total_prods] = (decltype(X)) _X;
-	char (*M)[n_prods] = (decltype(M)) _M;
+	bool (*M)[n_prods] = (decltype(M)) _M;
 
 	Mc[0] = 0;
 	for (int j = 0; j < n_prods; ++j)
 	{
-		//elog(INFO, "M[%d][%d] = %lf * %lf / (%lf * %lf)", 0, j, X[0][j], X_total, Xc[0],  Xp[j]);
 		M[0][j] = (X[0][j] * X_total / (Xc[0] * Xp[j]) >= 1 ? 1 : 0);
 		Mc[0] += M[0][j];
 		Mp[j] = M[0][j];
@@ -482,24 +461,20 @@ void calc_M(double** _X, double* Xp, double* Xc, int n_groups, int n_prods, int 
 		for (int j = 0; j < n_prods; ++j)
 		{
 			M[i][j] = (X[i][j] * X_total / (Xc[i] * Xp[j]) >= 1 ? 1 : 0);
-			//elog(INFO, "M[%d][%d] %d = %lf * %lf / (%lf * %lf)",
-			//	i, j, M[i][j], X[i][j], X_total, Xc[i], Xp[j]);
 			Mc[i] += M[i][j];
 			Mp[j] += M[i][j];
 		}
-		//elog(INFO, "i: %d", i);
 	}
 }
 
-void calc_W(char**_M, double* Mc, double* Mp, int n_groups, int n_prods, double** _W)
+void calc_W(bool**_M, double* Mc, double* Mp, int n_groups, int n_prods, double** _W)
 {
-	char (*M)[n_prods] = (decltype(M)) _M;
+	bool (*M)[n_prods] = (decltype(M)) _M;
 	double (*W)[n_groups] = (decltype(W)) _W;
 
 	#pragma omp parallel for
 	//Dava pra pular produtos que um país não tem especialidade
 	for (int i = 0; i < n_groups; ++i)
-	{
 		for (int j = 0; j < n_groups; ++j)
 		{
 			W[i][j] = 0;
@@ -508,48 +483,52 @@ void calc_W(char**_M, double* Mc, double* Mp, int n_groups, int n_prods, double*
 				W[i][j] += (M[i][p] & M[j][p]) / Mp[p];
 			W[i][j] /= Mc[i];
 		}
-		//elog(INFO, "i: %d", i);
-	}
 }
 
 void calc_Kc(double** W, int n_groups, double* K)
 {
-	double mean = 0, sum_quad = 0, stdev;
-	double* avlr = (double*) palloc(sizeof(*avlr) * n_groups);
-	double* avli = (double*) palloc(sizeof(*avli) * n_groups);
+	double *avlr, *avli, mean = 0, sum_quad = 0, stdev;
+	int max[2];
+
 	double (*avtr)[n_groups] = (decltype(avtr)) palloc(sizeof(*avtr) * n_groups);
+	avlr = (double*) palloc(sizeof(*avlr) * n_groups);
+	avli = (double*) palloc(sizeof(*avli) * n_groups);
 
 	int info = LAPACKE_dgeev(LAPACK_ROW_MAJOR, 'N', 'V', n_groups, (double*)W,
 		n_groups, avlr, avli, NULL, n_groups, (double*)avtr, n_groups);
-	//elog(INFO, "info %d", info);
 
-	int max = 1;
+	if (avlr[0] > avlr[1])
+	{
+		max[0] = 0;
+		max[1] = 1;
+	}
+	else
+	{
+		max[0] = 1;
+		max[1] = 0;
+	}
 
-	//# Se o 1 sempre for o primeiro
 	for (int i = 2; i < n_groups; ++i)
-		if (avlr[i] > avlr[max])
-			max = i;
-/*
-	for (int i = 0; i < n_groups; ++i)
-		elog(INFO, "Eigenvalue[%d]: %lf + %lfi", i, avlr[i], avli[i]);
-
-	elog(INFO, "Maior autovalor: %d\n", max);
-
-	for (int i = 0; i < n_groups; ++i)
-		elog(INFO, "Eigenvvector[%d][%d]: %lf", i, 0, avtr[i][0]);
-*/	
+		if (avlr[i] > avlr[max[1]])
+			if (avlr[i] > avlr[max[0]])
+			{
+				max[1] = max[0];
+				max[0] = i;
+			}
+			else
+				max[1] = i;
 
 	for (int i = 0; i < n_groups; ++i)
-		K[i] = avtr[i][max];
+		K[i] = avtr[i][max[1]];
 
 	pfree(avlr);
 	pfree(avli);
 	pfree(avtr);
 }
 
-void calc_Kp(double* Kc, int n_groups, int n_prods, char** _M, double* Mp, double* Kp)
+void calc_Kp(double* Kc, int n_groups, int n_prods, bool** _M, double* Mp, double* Kp)
 {
-	char (*M)[n_prods] = (decltype(M)) _M;
+	bool (*M)[n_prods] = (decltype(M)) _M;
 
 	for (int j = 0; j < n_prods; ++j)
 		Kp[j] = M[0][j] ? Kc[0] : 0;
@@ -560,23 +539,6 @@ void calc_Kp(double* Kc, int n_groups, int n_prods, char** _M, double* Mp, doubl
 
 	for (int j = 0; j < n_prods; ++j)
 		Kp[j] /= Mp[j];
-}
-
-Datum getGroup(ArrayIterator it)
-{
-	HeapTupleHeader hth;
-	Datum daux;
-	bool isNullAux;
-
-	array_iterate(it, &daux, &isNullAux);
-
-	if (it->arr->elemtype != TEXTOID)
-	{
-		hth = DatumGetHeapTupleHeader(daux);
-		daux = GetAttributeByNum(hth, 1, &isNullAux);
-	}
-	
-	return daux;
 }
 
 void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
@@ -595,7 +557,7 @@ void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
 
 	for (int i = 0; i < n_groups; ++i)
 	{
-		data[0] = getGroup(pm->ar_it);
+		data[0] = PointerGetDatum(pm->cntrs[i]);
 		data[1] = Float8GetDatumFast(Kc[i]);
 		elems[i] = PointerGetDatum(heap_form_tuple(td, data, isnull)->t_data);
 	}
@@ -627,34 +589,34 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	FuncCallContext* funcctx, MemoryContext original_context)
 {
 	//# Mc e Mp podem virar int*, se fossem convertidos para double no uso
-	double **X, *Xc, *Xp, X_total = 0, *Mc, *Mp, *Kc, *Kp;
+	double **X, *Xc, *Xp, X_total = 0, *Mc, *Mp, **W, *Kc, *Kp;
+	bool** M;
 	int n_total_prods, n_prods, n_groups = ARR_DIM(PG_GETARG_ARRAYTYPE_P(0));
 
 	n_total_prods = calc_X(PG_GETARG_ARRAYTYPE_P(0), PG_GETARG_INT32(1), PG_GETARG_INT32(2),
 		PG_GETARG_INT32(3) << 1, &X, &Xp, &Xc, pm, index);
 	tick("calc_X");
+	n_groups = filter_groups(Xc, X, pm->cntrs, n_groups, n_total_prods, index);
+	tick("filter_groups");
 	n_prods = filter_products(Xp, X, pm->prods, n_groups, n_total_prods, index);
 	tick("filter_products");
 
 	for (int i = 0; i < n_groups; ++i)
 		X_total += Xc[i];
 
-	char (*M)[n_prods] = (decltype(M)) palloc(sizeof(*M) * n_groups);
+	M = (bool**) palloc(sizeof(*M) * n_groups * n_prods);
 	Mc = (double*) palloc(sizeof(*Mc) * n_groups);
 	Mp = (double*) palloc(sizeof(*Mp) * n_prods);
 
-	calc_M(X, Xp, Xc, n_groups, n_prods, n_total_prods, X_total, (char**) M, Mc, Mp);
+	calc_M(X, Xp, Xc, n_groups, n_prods, n_total_prods, X_total, M, Mc, Mp);
 	pfree(X);
 	pfree(Xc);
 	pfree(Xp);
 	tick("calc_M");
 
-	/*for (int i = 0; i < n_groups; ++i)
-		elog(INFO, "Mc[%d]: %lf", i, Mc[i]);*/
+	W = (double**) palloc(sizeof(*W) * n_groups * n_prods);
 
-	double (*W)[n_groups] = (decltype(W)) palloc(sizeof(*W) * n_groups);
-
-	calc_W((char**) M, Mc, Mp, n_groups, n_prods, (double**) W);
+	calc_W(M, Mc, Mp, n_groups, n_prods, W);
 	pfree(Mc);
 	if (index == ECI)
 	{
@@ -665,7 +627,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 
 	Kc = (double*) SPI_palloc(sizeof(*Kc) * n_groups);
 
-	calc_Kc((double**) W, n_groups, Kc);
+	calc_Kc(W, n_groups, Kc);
 	pfree(W);
 	tick("calc_Kc");
 
@@ -673,12 +635,14 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	{
 		z_transform(Kc, n_groups);
 		pm->indexes = Kc;
+
+		pm->n_indexes = n_groups;
 		return;
 	}
 
 	Kp = (double*) SPI_palloc(sizeof(*Kp) * n_prods);
 
-	calc_Kp(Kc, n_groups, n_prods, (char**) M, Mp, Kp);
+	calc_Kp(Kc, n_groups, n_prods, M, Mp, Kp);
 	tick("calc_Kp");
 	pfree(M);
 	pfree(Mp);
@@ -690,7 +654,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 		z_transform(Kp, n_prods);
 		pm->indexes = Kp;
 
-		pm->n_prods = n_prods;
+		pm->n_indexes = n_prods;
 		return;
 	}
 
@@ -713,7 +677,7 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	if (ARR_HASNULL(groups))
 		elog(ERROR, "groups has null elements");
 
-	if (!ARR_NDIM(groups) || ARR_DIM(groups) < 2)
+	if (ARR_DIM(groups) < 2)
 		elog(ERROR, "groups must have at least 2 elements");
 
 	if (hs_digits > 3 || hs_digits < 1)
@@ -735,9 +699,6 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	// Cria memória multichamada
 	pm = (perm_mem*) palloc(sizeof(perm_mem));
 	funcctx->user_fctx = pm;
-
-	if (index & ECI)
-		pm->ar_it = array_create_iterator(groups, 0, NULL);
 
 	/*		Calcula índices      */
 	SPI_connect();
@@ -763,30 +724,15 @@ Datum return_table(FunctionCallInfo fcinfo, index_t index)
 	funcctx = SRF_PERCALL_SETUP();
 	pm = (perm_mem*) funcctx->user_fctx;
 
+	//Encerra a última chamada
+	if (funcctx->call_cntr == pm->n_indexes)
+		SRF_RETURN_DONE(funcctx);
+
+	//Cria resultados da chamada
 	if (index == ECI)
-	{
-		//Encerra a última chamada
-		if (funcctx->call_cntr == ARR_DIM(PG_GETARG_ARRAYTYPE_P(0)))
-		{
-			array_free_iterator(pm->ar_it);
-			SRF_RETURN_DONE(funcctx);
-		}
-
-		//Cria resultados da chamada
-		dt[0] = getGroup(pm->ar_it);
-	}
+		dt[0] = PointerGetDatum(pm->cntrs[funcctx->call_cntr]);
 	else
-	{
-		//Encerra a última chamada
-		if (funcctx->call_cntr == pm->n_prods)
-			SRF_RETURN_DONE(funcctx);
-
-			//text* debug_t = palloc(VARHDRSZ + 6);
-			//SET_VARSIZE(debug_t, VARHDRSZ + 6);
-			//memcpy(VARDATA_ANY(debug_t), "IHMOI0", 6);
 		dt[0] = PointerGetDatum(pm->prods[funcctx->call_cntr]);
-	}
-	//elog(INFO, "K: %p %lf", pm->indexes, pm->indexes[0]);
 
 	dt[1] = Float8GetDatumFast(pm->indexes[funcctx->call_cntr]);
 
@@ -798,7 +744,7 @@ Datum return_table(FunctionCallInfo fcinfo, index_t index)
 
 BG_FUNCTION_INFO_V1(common_eci);
 
-//groups cgroup[], start_year integer, end_year integer, hs_digit_pairs integer
+// Args: groups (cgroup[] ou text[] para groups_), start_year integer, end_year integer, hs_digit_pairs integer
 Datum common_eci(PG_FUNCTION_ARGS)
 {
 	if (SRF_IS_FIRSTCALL())
@@ -835,7 +781,7 @@ text* add_country(mystring* query, ArrayIterator itv)
 	text* country;
 
 	array_iterate(itv, &daux, &is_null);
-	country = DatumGetTextP(daux);
+	country = DatumGetTextPP(daux);
 
 	if (VARSIZE_ANY_EXHDR(country) != COUNTRY_SIZE)
 		elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
@@ -845,7 +791,6 @@ text* add_country(mystring* query, ArrayIterator itv)
 	return country;
 }
 
-//Gambiarra
 t_map* add_contries(mystring* query, ArrayType* g1, ArrayType* g2)
 {
 	int n;
@@ -906,7 +851,7 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 
 	len += sizeof(QSELECT) + sizeof(QFCLOSE) + sizeof(QWSYEAR) + sizeof(QWFYEAR) + sizeof(QWPROD) +
 		+ sizeof(QGROUP) + 2 * MAXINTSIZE - 5;
-	//5 = 1(\') - 6 (sizeof \0s)
+	//5 = 1(\') - 6 (literals \0s)
 
 	PMYSTRING_INIT(query, VARHDRSZ + len);
 	query->litcat(QSELECT);
@@ -935,7 +880,7 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 		query->concat('\'');
 	}
 
-	query->concat(QGROUP, sizeof(QGROUP));
+	query->litcat(QGROUP);
 
 #undef QSELECT
 #undef QFCLOSE
@@ -944,7 +889,6 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 #undef QWPROD
 #undef QGROUP
 
-	//elog(INFO, "query= '%s'", query->data);
 	status = SPI_execute(query->data, true, 0);
 	pfree(query);
 
@@ -981,7 +925,6 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 		PG_RETURN_FLOAT8(0.0);
 	}
 
-	//elog(INFO, "n: %d", SPI_tuptable->numvals);
 	for (int i = 0; i < SPI_tuptable->numvals;)
 	{
 		current = first = SPI_tuptable->vals[i];
@@ -992,7 +935,6 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 		{
 			aux = SBI_getDouble(current, td, 4, &is_null);
 			mask = (*countrs_map)[SBI_getText(current, td, 1, &is_null)];
-			//elog(INFO, "\tmask %d", mask);
 
 			if (mask & 1)
 				g1 += aux;
@@ -1008,7 +950,6 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 			&& SBI_getInt(current, td, 3, &is_null) == SBI_getInt(first, td, 3, &is_null));
 
 		aux = g1 - g2;
-		//elog(INFO, "d %d", aux);
 
 		dist += aux * aux;
 	}

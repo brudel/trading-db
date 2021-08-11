@@ -2,6 +2,8 @@
 
 Esse repositório contém material relacionado ao trabalho Armazenamento e Processamento de Dados de Comercio Internacional Usando TimescaleDB, inclundo o script SQL para a criação da bade de dados, o código das operações implementadas e a configuração da imagem docker que encapsula a base.
 
+Observação: As funções que recebem vetores, podem receber vetores de qualquer dimencionalidade.
+
 ## Esquema
 
 ### continent

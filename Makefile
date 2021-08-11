@@ -9,10 +9,30 @@ static := -llapacke -lblas -lgfortran -lm
 #-Wl,-Bstatic -Wl,-Bdynamic
 
 teste: ${so_file}
-	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
-#"SELECT euclidean_distance('chn', 'uni', 1998, 1998)"
-#"SELECT * FROM common_eci(array(SELECT (exporter, ARRAY[exporter])::cgroup FROM transaction WHERE year = 1998 GROUP BY exporter ORDER BY exporter), 1998);"
-#"SELECT * FROM common_eci(array(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
+	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
+#"SELECT * FROM countries_eci(ARRAY(SELECT code FROM country ORDER BY code), 1998, hs_digit_pairs => 1);"
+#"SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
+
+####	Testes de argumentos    ####
+#	Erro de argumento
+#ARRAY[]::cgroup[]
+#ARRAY[NULL, NULL]::cgroup[]
+#ARRAY[('chn', ARRAY['chn'])]::cgroup[]
+#ARRAY[(NULL, ARRAY['chn']), ('niu', ARRAY['niu'])]::cgroup[]
+#ARRAY[('chn', NULL), ('niu', ARRAY['niu'])]::cgroup[]
+#ARRAY[('chn', ARRAY[NULL]), ('niu', ARRAY['niu'])]::cgroup[]
+#ARRAY[('chn', ARRAY['1234']), ('niu', ARRAY['niu'])]::cgroup[]
+
+#	Erro esperado de execução
+#ARRAY[('chn', ARRAY[]::text[]), ('niu', ARRAY[]::text[])]::cgroup[]
+#ARRAY[('chn', ARRAY['chn']), ('niu', ARRAY[]::text[])]::cgroup[]
+#ARRAY[('chn', ARRAY[]::text[]), ('niu', ARRAY['niu'])]::cgroup[]
+
+#	Testes válidos
+#ARRAY[('chn', ARRAY['chn']), ('niu', ARRAY['niu'])]::cgroup[]
+#ARRAY[ARRAY['chn', 'niu'], ARRAY['bra', 'ind']]
+#ARRAY[('chn', ARRAY['chn']), ('niu', ARRAY['niu'], ('oie', ARRAY[]::text[]))]::cgroup[] #Remoção de país sem transação no ano
+#ARRAY(SELECT code FROM country ORDER BY code)
 
 ${so_file}: trading.o
 	g++ -shared trading.o -o ${so_file} ${static}

@@ -138,10 +138,10 @@ struct t_aux
 			if (fix_len & 1)
 				hash = (hash << 8) | VARDATA_ANY(str)[fix_len & 6];
 
-			return hash_bytes_uint32_extended(hash, 0);
+			return hash * 31; //hash_bytes_uint32_extended 31        9973    11400714819323198485
 		}
 		else
-			return hash_bytes_extended((unsigned char*) VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), 0);
+			return hash_bytes_extended((unsigned char*) VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), 0) * 31;
 	}
 };
 
