@@ -1,3 +1,5 @@
+test-db := td0
+
 build: Dockerfile trading.so 002_set_trading_db.sql
 	sudo docker build -t brudel/trading-db .
 
@@ -11,18 +13,22 @@ trading.so: ../trading.so
 	cp ../set_trading_db.sql 002_set_trading_db.sql
 
 test: build
-	sudo docker run -d --name ts1 brudel/trading-db
-	sudo docker start ts1
+	mkdir -p pgdata
+	sudo chown 70:$$USER pgdata
+	sudo docker run -d --name ${test-db} -v "$$PWD""/pgdata:/var/lib/postgresql/data/" brudel/trading-db
+	sudo docker start ${test-db}
+	sleep 3
+	sudo chmod g+rwx pgdata
 
 test-conn:
-	sudo docker exec -it ts1 psql -U postgres
+	sudo docker exec -it ${test-db} psql -U postgres
 
 clean-img:
 	sudo docker image rm brudel/trading-db
 
 clean-test:
-	sudo docker stop ts1
-	sudo docker rm ts1
+	sudo docker stop ${test-db}
+	sudo docker rm ${test-db}
 
 clean-docker:
 	make clean-test

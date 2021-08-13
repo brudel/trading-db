@@ -1,14 +1,12 @@
-ts := sudo docker exec -it ts0
+test-db := td0
+pglib := pglib
+ts := sudo docker exec -it ${test-db}
 tsparams := -U postgres
 psql := ${ts} psql ${tsparams}
-pg11 := /usr/include/postgresql/11/server
-pg13 := /home/brudel/Área\ de\ trabalho/Faculdade/TCC/Operações/pglib
-so_file := /home/brudel/Área\ de\ trabalho/Faculdade/TCC/Docker/tsdocker/trading.so
+test_file := Docker/pgdata/trading.so
 static := -llapacke -lblas -lgfortran -lm
-#static := /usr/lib/x86_64-linux-gnu/liblapacke.a #/usr/lib/x86_64-linux-gnu/libblas.a /usr/lib/x86_64-linux-gnu/liblapack.a
-#-Wl,-Bstatic -Wl,-Bdynamic
 
-teste: ${so_file}
+test: ${test_file}
 	${psql} -c "SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
 #"SELECT * FROM countries_eci(ARRAY(SELECT code FROM country ORDER BY code), 1998, hs_digit_pairs => 1);"
 #"SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
@@ -34,22 +32,37 @@ teste: ${so_file}
 #ARRAY[('chn', ARRAY['chn']), ('niu', ARRAY['niu'], ('oie', ARRAY[]::text[]))]::cgroup[] #Remoção de país sem transação no ano
 #ARRAY(SELECT code FROM country ORDER BY code)
 
-${so_file}: trading.so
-	cp trading.so ${so_file}
+start-test:
+	sudo docker start ${test-db}
+	sleep 3
+	sudo chmod g+rwx Docker/pgdata
+
+${test_file}: trading.so Docker/pgdata
+	cp trading.so ${test_file}
+
+Docker/pgdata:
+	make -C Docker test
 
 trading.so: trading.o
 	g++ -shared trading.o -o trading.so ${static}
 
-trading.o: trading.cpp Makefile utils.h
-	g++ -fPIC trading.cpp -I${pg13} -c -fno-exceptions -Wno-write-strings
+trading.o: trading.cpp Makefile utils.h ${pglib}
+	g++ -fPIC trading.cpp -I${pglib} -c -fno-exceptions -Wno-write-strings
+
+${pglib}:
+	sudo docker run -d --name td-aux postgres:13-alpine
+	sudo docker start td-aux &
+	sudo docker cp td-aux:/usr/local/include/postgresql/server/ ${pglib}
+	sudo docker stop td-aux
+	sudo docker rm td-aux
 
 conn:
 	${psql}
 
 cteste: teste.cpp
-	g++ teste.cpp -o exe
+	g++ teste.cpp -o exe -I${pglib} ${static}
 	./exe
 
 vcteste: teste.cpp
-	g++ teste.cpp -o exe -g
+	g++ teste.cpp -o exe -g -I${pglib} ${static}
 	valgrind ./exe
