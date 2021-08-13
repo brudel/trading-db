@@ -1,6 +1,6 @@
 ts := sudo docker exec -it ts0
 tsparams := -U postgres
-Alocalparams := timescale_teste
+psql := ${ts} psql ${tsparams}
 pg11 := /usr/include/postgresql/11/server
 pg13 := /home/brudel/Área\ de\ trabalho/Faculdade/TCC/Operações/pglib
 so_file := /home/brudel/Área\ de\ trabalho/Faculdade/TCC/Docker/tsdocker/trading.so
@@ -9,7 +9,7 @@ static := -llapacke -lblas -lgfortran -lm
 #-Wl,-Bstatic -Wl,-Bdynamic
 
 teste: ${so_file}
-	${ts} psql ${tsparams} ${localparams} -c "SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
+	${psql} -c "SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
 #"SELECT * FROM countries_eci(ARRAY(SELECT code FROM country ORDER BY code), 1998, hs_digit_pairs => 1);"
 #"SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
 
@@ -34,14 +34,17 @@ teste: ${so_file}
 #ARRAY[('chn', ARRAY['chn']), ('niu', ARRAY['niu'], ('oie', ARRAY[]::text[]))]::cgroup[] #Remoção de país sem transação no ano
 #ARRAY(SELECT code FROM country ORDER BY code)
 
-${so_file}: trading.o
-	g++ -shared trading.o -o ${so_file} ${static}
+${so_file}: trading.so
+	cp trading.so ${so_file}
+
+trading.so: trading.o
+	g++ -shared trading.o -o trading.so ${static}
 
 trading.o: trading.cpp Makefile utils.h
 	g++ -fPIC trading.cpp -I${pg13} -c -fno-exceptions -Wno-write-strings
 
 conn:
-	${ts} psql ${tsparams}
+	${psql}
 
 cteste: teste.cpp
 	g++ teste.cpp -o exe
