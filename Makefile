@@ -37,6 +37,9 @@ start-test:
 	sleep 3
 	sudo chmod g+rwx Docker/pgdata
 
+install-reqs:
+	sudo apt-get install git g++ make docker.io liblapacke-dev
+
 ${test_file}: trading.so Docker/pgdata
 	cp trading.so ${test_file}
 
