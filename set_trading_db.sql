@@ -100,13 +100,13 @@ CREATE TABLE IF NOT EXISTS transaction --# Add constraints latter
 
 -- Create indexes --
 
-CREATE INDEX IF NOT EXISTS
+CREATE INDEX
     ON transaction(importer, product)
 
     WITH
         (fillfactor = 100);
 
-CREATE INDEX IF NOT EXISTS
+CREATE INDEX
     ON transaction(product, exporter)
 
     WITH
@@ -114,13 +114,13 @@ CREATE INDEX IF NOT EXISTS
 
 -- Clean --
 
-TRUNCATE continent;
-TRUNCATE country;
-TRUNCATE country_annual_measure;
-TRUNCATE country_group;
-TRUNCATE country_group_belonging;
-TRUNCATE product;
-TRUNCATE transaction;
+TRUNCATE continent CASCADE;
+TRUNCATE country CASCADE;
+TRUNCATE country_annual_measure CASCADE;
+TRUNCATE country_group CASCADE;
+TRUNCATE country_group_belonging CASCADE;
+TRUNCATE product CASCADE;
+TRUNCATE transaction CASCADE;
 
 -- Convert to timescale --
 
