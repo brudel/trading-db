@@ -38,7 +38,7 @@ start-test:
 	sudo chmod g+rwx Docker/pgdata
 
 install-reqs:
-	sudo apt-get install git g++ make docker.io liblapacke-dev
+	sudo apt-get install git g++ make docker.io liblapacke-dev gfortran
 
 ${test_file}: trading.so Docker/pgdata
 	cp trading.so ${test_file}
@@ -54,7 +54,7 @@ trading.o: trading.cpp Makefile utils.h ${pglib}
 
 ${pglib}:
 	sudo docker run -d --name td-aux postgres:13-alpine
-	sudo docker start td-aux &
+	sudo docker start td-aux
 	sudo docker cp td-aux:/usr/local/include/postgresql/server/ ${pglib}
 	sudo docker stop td-aux
 	sudo docker rm td-aux
