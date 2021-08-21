@@ -3,10 +3,10 @@ pglib := pglib
 ts := sudo docker exec -it ${test-db}
 tsparams := -U postgres
 psql := ${ts} psql ${tsparams}
-test_file := Docker/pgdata/trading.so
+so_flag := .so_flag
 static := -llapacke -lblas -lgfortran -lm
 
-test: ${test_file}
+test: test-update
 	${psql} -c "SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
 #"SELECT * FROM countries_eci(ARRAY(SELECT code FROM country ORDER BY code), 1998, hs_digit_pairs => 1);"
 #"SELECT * FROM common_eci(ARRAY(SELECT (left(code, 1), array_agg(code))::cgroup FROM country GROUP BY left(code, 1) ORDER BY left(code, 1)), 1998, hs_digit_pairs => 1);"
@@ -33,15 +33,16 @@ test: ${test_file}
 #ARRAY(SELECT code FROM country ORDER BY code)
 
 start-test:
-	sudo docker start ${test-db}
-	sleep 3
-	sudo chmod g+rwx Docker/pgdata
+	make -C Docker start
 
 install-reqs:
 	sudo apt-get install git g++ make docker.io liblapacke-dev gfortran
 
-${test_file}: trading.so Docker/pgdata
-	cp trading.so ${test_file}
+test-update: ${so_flag}
+
+${so_flag}: trading.so
+	touch ${so_flag}
+	sudo docker cp trading.so ${test-db}:/usr/local/lib/postgresql/
 
 Docker/pgdata:
 	make -C Docker test
@@ -69,3 +70,6 @@ cteste: teste.cpp
 vcteste: teste.cpp
 	g++ teste.cpp -o exe -g -I${pglib} ${static}
 	valgrind ./exe
+
+clean:
+	sudo rm -rf ${pglib} trading.so trading.o ${so_flag}
