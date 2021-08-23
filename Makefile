@@ -33,7 +33,7 @@ test: test-update
 #ARRAY(SELECT code FROM country ORDER BY code)
 
 start-test:
-	make -C Docker start
+	make -C Docker start-test
 
 install-reqs:
 	sudo apt-get install git g++ make docker.io liblapacke-dev gfortran
