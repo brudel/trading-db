@@ -6,7 +6,8 @@ extern "C" {
 #include "utils/lsyscache.h" //get_typlenbyvalalign
 #include "executor/spi.h" //SPI
 #include <lapacke.h> // Eigenvectors and eigenvalues
-#include <omp.h> // Paralelização
+// Commented because do not improve execution time
+//#include <omp.h> // Parallelization
 
 PG_MODULE_MAGIC;
 }
@@ -472,7 +473,7 @@ void calc_W(bool**_M, double* Mc, double* Mp, int n_groups, int n_prods, double*
 	bool (*M)[n_prods] = (decltype(M)) _M;
 	double (*W)[n_groups] = (decltype(W)) _W;
 
-	#pragma omp parallel for
+	// #pragma omp parallel for
 	//Dava pra pular produtos que um país não tem especialidade
 	for (int i = 0; i < n_groups; ++i)
 		for (int j = 0; j < n_groups; ++j)
