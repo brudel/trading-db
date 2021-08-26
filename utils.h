@@ -2,37 +2,10 @@ extern "C" {
 #include "common/hashfn.h"
 }
 
-#include <cstring>
-
 
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 #define MAXINTSIZE 11
 #define litcat(lit) concat(lit, sizeof(lit) - 1) // For hardcoded strings
-
-
- /* Working state for array_iterate() */
- typedef struct ArrayIteratorData
- {
-	/* basic info about the array, set up during array_create_iterator() */
-	ArrayType  *arr;            /* array we're iterating through */
-	bits8      *nullbitmap;     /* its null bitmap, if any */
-	int         nitems;         /* total number of elements in array */
-	int16       typlen;         /* element type's length */
-	bool        typbyval;       /* element type's byval property */
-	char        typalign;       /* element type's align property */
-
-	/* information about the requested slice size */
-	int         slice_ndim;     /* slice dimension, or 0 if not slicing */
-	int         slice_len;      /* number of elements per slice */
-	int        *slice_dims;     /* slice dims array */
-	int        *slice_lbound;   /* slice lbound array */
-	Datum      *slice_values;   /* workspace of length slice_len */
-	bool       *slice_nulls;    /* workspace of length slice_len */
-
-	/* current position information, updated on each iteration */
-	char       *data_ptr;       /* our current position in the array */
-	int         current_item;   /* the item # we're at in the array */
- } ArrayIteratorData;
 
 
 int itoa(int num, char* str)
