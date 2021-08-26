@@ -41,8 +41,8 @@ install-reqs:
 test-update: ${so_flag}
 
 ${so_flag}: trading.so
-	touch ${so_flag}
 	sudo docker cp trading.so ${test-db}:/usr/local/lib/postgresql/
+	touch ${so_flag}
 
 Docker/pgdata:
 	make -C Docker test
