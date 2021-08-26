@@ -94,7 +94,7 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 	text* taux;
 
 	if (index & ECI)
-		pm->cntrs = (text**) SPI_palloc(sizeof(*pm->cntrs) * ARR_DIM(groups));
+		pm->cntrs = (text**) palloc(sizeof(*pm->cntrs) * ARR_DIM(groups));
 
 	//Retirar grupos com 0 elementos
 	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
@@ -140,7 +140,7 @@ void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 	text* taux;
 
 	if (index & ECI)
-		pm->cntrs = (text**) SPI_palloc(sizeof(*pm->cntrs) * ARR_DIM(groups));
+		pm->cntrs = (text**) palloc(sizeof(*pm->cntrs) * ARR_DIM(groups));
 
 	ArrayIterator itv = array_create_iterator(groups, 0, NULL);
 	while (array_iterate(itv, &daux, &is_null))
@@ -312,13 +312,14 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	}
 	tick("countrs_map");
 
+	SPI_connect();
 	n_prods = create_prods_map(prods_map, hs_digits, pm, index);
 	tick("prods_map");
 
-	double (*X)[n_prods] = (decltype(X)) palloc(sizeof(*X) * n_groups);
+	double (*X)[n_prods] = (decltype(X)) SPI_palloc(sizeof(*X) * n_groups);
 	*_X = (double**) X;
-	*_Xc = Xc = (double*) palloc(sizeof(*Xc) * n_groups);
-	*_Xp = Xp = (double*) palloc(sizeof(*Xp) * n_prods);
+	*_Xc = Xc = (double*) SPI_palloc(sizeof(*Xc) * n_groups);
+	*_Xp = Xp = (double*) SPI_palloc(sizeof(*Xp) * n_prods);
 
 
 	//Primeira iteração do for em seguida, mas iniciando Xp
@@ -367,6 +368,7 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	}
 	SPI_freetuptable(SPI_tuptable);
 
+	SPI_finish();
 	delete countrs_map, prods_map;
 
 	return n_prods;
@@ -542,8 +544,8 @@ void calc_Kp(double* Kc, int n_groups, int n_prods, bool** _M, double* Mp, doubl
 		Kp[j] /= Mp[j];
 }
 
-void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
-		perm_mem* pm, TupleDesc call_td, MemoryContext original_context)
+void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods, perm_mem* pm,
+	TupleDesc call_td)
 {
 	short elmlen;
 	bool elmbyval;
@@ -581,13 +583,10 @@ void pack_indexes(double* Kc, int n_groups, double* Kp, int n_prods,
 
 	data[0] = PointerGetDatum(arr);
 
-	MemoryContext old_contex = MemoryContextSwitchTo(original_context);
 	pm->vecs_tuple = HeapTupleGetDatum(heap_form_tuple(call_td, data, isnull));
-	MemoryContextSwitchTo(old_contex);
 }
 
-void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
-	FuncCallContext* funcctx, MemoryContext original_context)
+void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index, TupleDesc call_td)
 {
 	//# Mc e Mp podem virar int*, se fossem convertidos para double no uso
 	double **X, *Xc, *Xp, X_total = 0, *Mc, *Mp, **W, *Kc, *Kp;
@@ -626,7 +625,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	}
 	tick("calc_W");
 
-	Kc = (double*) SPI_palloc(sizeof(*Kc) * n_groups);
+	Kc = (double*) palloc(sizeof(*Kc) * n_groups);
 
 	calc_Kc(W, n_groups, Kc);
 	pfree(W);
@@ -641,7 +640,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 		return;
 	}
 
-	Kp = (double*) SPI_palloc(sizeof(*Kp) * n_prods);
+	Kp = (double*) palloc(sizeof(*Kp) * n_prods);
 
 	calc_Kp(Kc, n_groups, n_prods, M, Mp, Kp);
 	tick("calc_Kp");
@@ -650,7 +649,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 
 	if (index == PCI)
 	{
-		SPI_pfree(Kc);
+		pfree(Kc);
 
 		z_transform(Kp, n_prods);
 		pm->indexes = Kp;
@@ -662,7 +661,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index,
 	//ECI_PCI
 	z_transform(Kc, n_groups);
 	z_transform(Kp, n_prods);
-	pack_indexes(Kc, n_groups, Kp, n_prods, pm, funcctx->tuple_desc, original_context);
+	pack_indexes(Kc, n_groups, Kp, n_prods, pm, call_td);
 }
 
 void common_index_init(FunctionCallInfo fcinfo, index_t index)
@@ -702,13 +701,11 @@ void common_index_init(FunctionCallInfo fcinfo, index_t index)
 	funcctx->user_fctx = pm;
 
 	/*		Calcula índices      */
-	SPI_connect();
 
-	initick(); //funcctx->multi_call_memory_ctx
-	calc_indexes(fcinfo, pm, index, funcctx, funcctx->multi_call_memory_ctx);
+	initick();
+	calc_indexes(fcinfo, pm, index, funcctx->tuple_desc);
 	tick("calc_indexes");
 
-	SPI_finish();
 	MemoryContextSwitchTo(original_context);
 }
 
