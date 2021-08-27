@@ -142,11 +142,11 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 		{
 			taux = DatumGetTextPP(daux);
 			if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
-				elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
+				elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
 
 			// Add group member to map with index of the group
 			if (!countrs_map->insert({taux, count}).second)
-				elog(ERROR, "country belong to more than one group");
+				elog(ERROR, "country belongs to more than one group");
 		}
 
 		++count;
@@ -175,12 +175,13 @@ void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 		taux = DatumGetTextPP(daux);
 
 		if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
-			elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
+			elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
 
 		if (index & ECI)
 			pm->cntrs[count] = taux;
 
-		countrs_map->insert({taux, count++});
+		if (!countrs_map->insert({taux, count++}).second)
+			elog(ERROR, "two groups with same name");
 	}
 }
 
@@ -925,7 +926,7 @@ text* add_country(mystring* query, ArrayIterator itv)
 	country = DatumGetTextPP(daux);
 
 	if (VARSIZE_ANY_EXHDR(country) != COUNTRY_SIZE)
-		elog(ERROR, "country code text must be of size %d", COUNTRY_SIZE);
+		elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
 
 	query->concat(VARDATA_ANY(country), COUNTRY_SIZE);
 #define QSEP "', '"
