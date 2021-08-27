@@ -4,7 +4,7 @@ build: .build
 
 .build: Dockerfile trading.so 002_set_trading_db.sql
 	sudo docker build -t brudel/trading-db .
-	touch ../.so_flag
+	touch ../.so_flag # Updated in cointainer with the image
 	touch .build
 
 trading.so: ../trading.so

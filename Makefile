@@ -20,6 +20,7 @@ test: test-update
 #ARRAY[('chn', NULL), ('niu', ARRAY['niu'])]::cgroup[]
 #ARRAY[('chn', ARRAY[NULL]), ('niu', ARRAY['niu'])]::cgroup[]
 #ARRAY[('chn', ARRAY['1234']), ('niu', ARRAY['niu'])]::cgroup[]
+#ARRAY[('chn', ARRAY['niu']), ('niu', ARRAY['niu'])]::cgroup[]
 
 #	Erro esperado de execução
 #ARRAY[('chn', ARRAY[]::text[]), ('niu', ARRAY[]::text[])]::cgroup[]

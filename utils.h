@@ -3,11 +3,15 @@ extern "C" {
 }
 
 
-#define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
-#define MAXINTSIZE 11
-#define litcat(lit) concat(lit, sizeof(lit) - 1) // For hardcoded strings
+/*		Util macros      */
+#define MAX(X, Y) ((X) > (Y) ? (X) : (Y)) // Greater element
+#define MAXINTSIZE 11 // Max possible size of a int in a decimal string
+#define sizeofl(lit) sizeof(lit) -1 // Size of a string literal without '\0'
+// Concatenate literal string into a struct mystring
+#define litcat(lit) concat(lit, sizeofl(lit))
 
 
+// Write a decimal into a char* address
 int itoa(int num, char* str)
 {
 	char buffer[10];
@@ -31,39 +35,49 @@ int itoa(int num, char* str)
 	return j;
 }
 
+// char* with length stored and some util functions
 struct mystring
 {
 	int len;
 	char data[];
 
+	// Concatenate another mystring in the end of if this
 	void concat(mystring* str)
 	{
 		memcpy(data + len, str->data, str->len);
 		len += str->len;
 	}
 
+	// Concatenate a char* with in the end of if this, with length given
 	void concat(char* cstr, int clen)
 	{
 		memcpy(data + len, cstr, clen);
 		len += clen;
 	}
 
+	// Contatenate a char in the end of if this
 	void concat(char c)
 	{
 		data[len++] = c;
 	}
 
+	// Contatenate a decial number in the end of if this
 	void concat(int d)
 	{
 		len += itoa(d, data + len);
 	}
 
+	// Address after last character
 	char* end()
 	{
 		return data + len;
 	}
 };
 
+/*	  Struct to hash and compare text
+ * 'fix_len' may be an integer not greater than 8 to fixed length texts, otherwise each
+ * size is get of text itself.
+ */
 struct t_aux
 {
 	uint fix_len;
@@ -71,6 +85,7 @@ struct t_aux
 	t_aux() : fix_len(0){}
 	t_aux(uint n) : fix_len(n){}
 
+	// Equal
 	bool operator()(text* a, text* b) const
 	{
 		int len;
@@ -96,6 +111,7 @@ struct t_aux
 		return !memcmp(VARDATA_ANY(a), VARDATA_ANY(b), len);
 	}
 
+	// hash
 	size_t operator()(text* str) const
 	{
 		size_t hash = 0;
@@ -118,6 +134,7 @@ struct t_aux
 	}
 };
 
+// Apply a z transform into 'vec' with 'n' elements
 void z_transform(double* vec, int n)
 {
 	double mean = 0, sum_quad = 0, stdev;
