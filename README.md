@@ -4,6 +4,22 @@ Esse repositório contém material relacionado ao trabalho Armazenamento e Proce
 
 Observação: As funções que recebem vetores, podem receber vetores de qualquer dimencionalidade.
 
+
+## Instruções de uso
+
+`trading-db$ make install-reqs`: Instala pré-requisitos para compilação.
+
+`trading-db/Docker$ make build`: Compila e cria a imagem brudel/trading-db.
+
+`trading-db/Docker$ make test`: Cria e inicia um container de teste.
+
+`trading-db$ make start-test`: Inicia o container de teste.
+
+`trading-db$ make conn`: Abre o cliente psql no container de teste.
+
+`trading-db$ make`: Executa o mando especificado no makefile no container de teste.
+
+
 ## Esquema
 
 ### continent
