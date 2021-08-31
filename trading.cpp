@@ -21,7 +21,6 @@ PG_MODULE_MAGIC;
  * transactions could be grouped by continent rather than by country. But this would
  * implicate a laborious interface change.
  */
-// Remove memory leaks for errors with non-POD data structs
 
 /*		Configuration macros      */
 // Log time of principal subroutines
@@ -106,7 +105,7 @@ enum index_t {
  * groups vector.
  * Optionally construct a group name vector on 'pm'->cntrs. (if 'index' have ECI flag).
  */
-void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* pm, index_t index)
+void create_common_countrs_map(t_map* countrs_map, ArrayType* groups, perm_mem* pm, index_t index)
 {
 	int count = 0;
 	Datum daux;
@@ -125,12 +124,18 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 		hth = DatumGetHeapTupleHeader(daux);
 
 		if (HeapTupleHeaderHasNulls(hth))
+		{
+			delete countrs_map;
 			elog(ERROR, "groups has null elements");
+		}
 
 		members = DatumGetArrayTypeP(GetAttributeByNum(hth, 2, &is_null));
 
 		if (ARR_HASNULL(members))
+		{
+			delete countrs_map;
 			elog(ERROR, "cgroup members has null elements");
+		}
 
 		ArrayIterator itv = array_create_iterator(members, 0, NULL);
 
@@ -142,11 +147,17 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 		{
 			taux = DatumGetTextPP(daux);
 			if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
+			{
+				delete countrs_map;
 				elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
+			}
 
 			// Add group member to map with index of the group
 			if (!countrs_map->insert({taux, count}).second)
+			{
+				delete countrs_map;
 				elog(ERROR, "country belongs to more than one group");
+			}
 		}
 
 		++count;
@@ -158,7 +169,7 @@ void create_common_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
  * Also validate groups vector.
  * Optionally construct a country_group name vector on 'pm'->cntrs. (if 'index' have ECI flag).
  */
-void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* pm, index_t index)
+void create_groups_countrs_map(t_map* countrs_map, ArrayType* groups, perm_mem* pm, index_t index)
 {
 	int count = 0;
 	Datum daux;
@@ -175,13 +186,19 @@ void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
 		taux = DatumGetTextPP(daux);
 
 		if (VARSIZE_ANY_EXHDR(taux) != COUNTRY_SIZE)
+		{
+			delete countrs_map;
 			elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
+		}
 
 		if (index & ECI)
 			pm->cntrs[count] = taux;
 
 		if (!countrs_map->insert({taux, count++}).second)
+		{
+			delete countrs_map;
 			elog(ERROR, "two groups with same name");
+		}
 	}
 }
 
@@ -190,7 +207,8 @@ void create_groups_countrs_map(t_map *countrs_map, ArrayType* groups, perm_mem* 
  * 'countrs_map'.
  * Optionally construct a product code vector on 'pm'->prods. (if 'index' have PCI flag).
  */
-int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t index)
+int create_prods_map(t_map* prods_map, int hs_digits, perm_mem* pm, index_t index,
+	t_map* countrs_map)
 {
 	int n;
 	TupleDesc td;
@@ -209,7 +227,10 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
 	pfree(query);
 
 	if (status <= 0 || SPI_tuptable == NULL)
+	{
+		delete countrs_map, prods_map;
 		elog(ERROR, "can't successfully access needed data on database");
+	}
 
 	/*		Create Map      */
 	td = SPI_tuptable->tupdesc;
@@ -247,7 +268,8 @@ int create_prods_map(t_map *prods_map, int hs_digits, perm_mem* pm, index_t inde
  * between 's_year' and 'f_year'. 'c_groups' indicate if the function group from
  * country_group and 'hs_digits' the aggregation level of the products.
  */
-void calc_X_query(int s_year, int f_year, int hs_digits, bool c_groups)
+void calc_X_query(int s_year, int f_year, int hs_digits, bool c_groups,
+	t_map* countrs_map, t_map* prods_map)
 {
 	int status;
 	mystring* query;
@@ -339,7 +361,10 @@ void calc_X_query(int s_year, int f_year, int hs_digits, bool c_groups)
 	pfree(query);
 
 	if (status <= 0 || SPI_tuptable == NULL)
+	{
+		delete countrs_map, prods_map;
 		elog(ERROR, "can't successfully access needed data on database");
+	}
 }
 
 /*	  Allocate and calculate X matrix and sum vectors.
@@ -372,7 +397,7 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	tick("countrs_map");
 
 	SPI_connect();
-	n_prods = create_prods_map(prods_map, hs_digits, pm, index);
+	n_prods = create_prods_map(prods_map, hs_digits, pm, index, countrs_map);
 	tick("prods_map");
 
 	/*		Allocate and initialize arrays      */
@@ -402,13 +427,16 @@ int calc_X(ArrayType* groups, int s_year, int f_year, int hs_digits,
 	tick("calc_X set");
 
 	/*		Populate arrays      */
-	calc_X_query(s_year, f_year, hs_digits, c_groups);
+	calc_X_query(s_year, f_year, hs_digits, c_groups, countrs_map, prods_map);
 	tick("SPI_execute");
 
 	td = SPI_tuptable->tupdesc;
 
 	if (!SPI_tuptable->numvals)
+	{
+		delete countrs_map, prods_map;
 		elog(ERROR, "no transactions were found with these parameters");
+	}
 
 	for (int i = 0; i < SPI_tuptable->numvals; i++)
 	{
@@ -915,8 +943,10 @@ Datum common_eci_pci(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(pm->vecs_tuple);
 }
 
-// Add country 'query' mytring.
-text* add_country(mystring* query, ArrayIterator itv)
+/*	  Add next country from Postgres array iterator 'itv' on 'query' mytring and set
+ * flags 'mask' on 'countrs_map' map.
+ */
+void add_country(mystring* query, ArrayIterator itv, t_map* countrs_map, int mask)
 {
 	Datum daux;
 	bool is_null;
@@ -926,11 +956,15 @@ text* add_country(mystring* query, ArrayIterator itv)
 	country = DatumGetTextPP(daux);
 
 	if (VARSIZE_ANY_EXHDR(country) != COUNTRY_SIZE)
+	{
+		delete countrs_map;
 		elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
+	}
 
 	query->concat(VARDATA_ANY(country), COUNTRY_SIZE);
 
-	return country;
+	(*countrs_map)[country] |= mask;
+	// It can be done because C++ initialize integers with 0
 }
 
 // Construct a list string of the countries of 'g1' and 'g2' on 'query' and a map of it.
@@ -957,7 +991,7 @@ t_map* add_countries(mystring* query, ArrayType* g1, ArrayType* g2)
 	n = ARR_DIM(g1);
 	for (int i = 0; i < n; ++i)
 	{
-		(*countrs_map)[add_country(query, itv)] = 1;
+		add_country(query, itv, countrs_map, 1);
 		query->litcat(QSEP);
 	}
 
@@ -966,13 +1000,12 @@ t_map* add_countries(mystring* query, ArrayType* g1, ArrayType* g2)
 	n = ARR_DIM(g2) - 1;
 	for (int i = 0; i < n; ++i)
 	{
-		(*countrs_map)[add_country(query, itv)] |= 2;
-		// It can be done because C++ initialize integers with 0
+		add_country(query, itv, countrs_map, 2);
 		query->litcat(QSEP);
 	}
 
 	// Adds g2 last element
-	(*countrs_map)[add_country(query, itv)] |= 2;
+	add_country(query, itv, countrs_map, 2);
 
 	return countrs_map;
 }
@@ -1053,7 +1086,10 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 	pfree(query);
 
 	if (status <= 0 || SPI_tuptable == NULL)
+	{
+		delete countrs_map;
 		elog(ERROR, "can't successfully access needed data on database");
+	}
 
 	return countrs_map;
 }
@@ -1088,6 +1124,7 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 	if (!SPI_tuptable->numvals)
 	{
 		SPI_freetuptable(SPI_tuptable);
+		delete countrs_map;
 		SPI_finish();
 		PG_RETURN_FLOAT8(0.0);
 	}
@@ -1126,6 +1163,7 @@ Datum euclidean_distance(PG_FUNCTION_ARGS)
 
 	SPI_freetuptable(SPI_tuptable);
 	SPI_finish();
+	delete countrs_map;
 
 	PG_RETURN_FLOAT8(sqrt(dist));
 }
