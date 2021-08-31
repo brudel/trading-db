@@ -915,7 +915,7 @@ Datum common_eci_pci(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(pm->vecs_tuple);
 }
 
-// Add country and separator ", " in 'query' mytring.
+// Add country 'query' mytring.
 text* add_country(mystring* query, ArrayIterator itv)
 {
 	Datum daux;
@@ -929,14 +929,12 @@ text* add_country(mystring* query, ArrayIterator itv)
 		elog(ERROR, "country code text must be of length %d", COUNTRY_SIZE);
 
 	query->concat(VARDATA_ANY(country), COUNTRY_SIZE);
-#define QSEP "', '"
-	query->litcat(QSEP);
 
 	return country;
 }
 
 // Construct a list string of the countries of 'g1' and 'g2' on 'query' and a map of it.
-t_map* add_contries(mystring* query, ArrayType* g1, ArrayType* g2)
+t_map* add_countries(mystring* query, ArrayType* g1, ArrayType* g2)
 {
 	int n;
 	Datum daux;
@@ -952,18 +950,26 @@ t_map* add_contries(mystring* query, ArrayType* g1, ArrayType* g2)
 	countrs_map = new t_map((ARR_DIM(g1) + ARR_DIM(g2)) * 1.3, t_aux(COUNTRY_SIZE),
 		t_aux(COUNTRY_SIZE));
 
+#define QSEP "', '"
+
 	// Iterate through g1
 	itv = array_create_iterator(g1, 0, NULL);
 	n = ARR_DIM(g1);
 	for (int i = 0; i < n; ++i)
+	{
 		(*countrs_map)[add_country(query, itv)] = 1;
+		query->litcat(QSEP);
+	}
 
 	// Iterate through g2
 	itv = array_create_iterator(g2, 0, NULL);
 	n = ARR_DIM(g2) - 1;
 	for (int i = 0; i < n; ++i)
+	{
 		(*countrs_map)[add_country(query, itv)] |= 2;
 		// It can be done because C++ initialize integers with 0
+		query->litcat(QSEP);
+	}
 
 	// Adds g2 last element
 	(*countrs_map)[add_country(query, itv)] |= 2;
@@ -1005,7 +1011,7 @@ t_map* query_series(ArrayType* g1, ArrayType* g2, int start_yi, int end_yi, VarC
 	query->litcat(QSELECT);
 
 	// Add countries to query of
-	countrs_map = add_contries(query, g1, g2);
+	countrs_map = add_countries(query, g1, g2);
 
 	query->litcat(QFCLOSE);
 
