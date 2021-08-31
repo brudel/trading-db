@@ -629,6 +629,9 @@ void calc_Kc(double** W, int n_groups, double* Kc)
 		(double*) avtr, // (OUT)
 		n_groups); // Leading dimension previous matrix
 
+	if (info)
+		elog(ERROR, "LAPACKE_dgeev returned error code %d", info);
+
 	/*		Find the second greater eigenvalue     */
 	// max[0] must be the greater one.
 	if (avlr[0] > avlr[1])
