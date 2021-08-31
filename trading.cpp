@@ -580,7 +580,7 @@ void calc_W(bool**_M, double* Mc, double* Mp, int n_groups, int n_prods, double*
 void calc_Kc(double** W, int n_groups, double* Kc)
 {
 	double *avlr, *avli, mean = 0, sum_quad = 0, stdev;
-	int max[2];
+	int info, max[2];
 
 	// Matrix for the (right) eigenvectors
 	double (*avtr)[n_groups] = (decltype(avtr)) palloc(sizeof(*avtr) * n_groups);
@@ -588,7 +588,7 @@ void calc_Kc(double** W, int n_groups, double* Kc)
 	avli = (double*) palloc(sizeof(*avli) * n_groups); // Imaginary part of eigenvalues, should be zeros
 
 	// Calculate eigenvalues and eigenvectors
-	int info = LAPACKE_dgeev(LAPACK_ROW_MAJOR, // matrix_layout
+	info = LAPACKE_dgeev(LAPACK_ROW_MAJOR, // matrix_layout
 		'N', // Don't calculate left eigenvectors
 		'V', //	Calculate (right) eigenvectors
 		n_groups, // Order of the matrix
@@ -742,7 +742,7 @@ void calc_indexes(FunctionCallInfo fcinfo, perm_mem* pm, index_t index, TupleDes
 
 
 	/*		Calculate W matrix     */
-	W = (double**) palloc(sizeof(*W) * n_groups * n_prods);
+	W = (double**) palloc(sizeof(*W) * n_groups * n_groups);
 
 	calc_W(M, Mc, Mp, n_groups, n_prods, W);
 	pfree(Mc);
