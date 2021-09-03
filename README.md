@@ -1,6 +1,6 @@
 # Trading-DB
 
-This repository contains material related to the thesis *Armazenamento e Processamento de Dados de Comercio Internacional Usando TimescaleDB*, including the SQL script to create the data base, the code for the implemented operations and the configuration of docker image that encapsulate the base.
+This repository contains material related to the thesis [*Armazenamento e Processamento de Dados de Comercio Internacional Usando TimescaleDB*](https://github.com/brudel/trading-db/blob/main/Monografia.pdf), including the SQL script to create the data base, the code for the implemented operations and the configuration of docker image that encapsulate the base.
 
 Note: Arrays passed as input to functions, can have any dimensionality.
 
